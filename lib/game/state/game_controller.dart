@@ -40,14 +40,26 @@ class GameController extends ChangeNotifier {
 
   static const double shapeSize = 72.0;
 
-  /// 보스 도형의 레이어 수. 일반 다층 도형(최대 2층)과 구분되는 기준.
+  /// 단일 보스의 레이어 수. 일반 다층 도형(최대 2층)과 구분되는 기준.
   static const int bossLayers = 10;
 
-  /// 보스 크기(낙하 구역의 짧은 변 대비 비율). 화면의 약 60%를 차지한다.
+  /// 쌍둥이 보스 각각의 레이어 수.
+  static const int twinBossLayers = 7;
+
+  /// 한쪽 쌍둥이가 먼저 쓰러졌을 때, 남은 쪽의 남은 층수가 늘어나는 값.
+  static const int twinBossReinforcedLayers = 10;
+
+  /// 단일 보스 크기(낙하 구역의 짧은 변 대비 비율). 화면의 약 60%.
   static const double bossSizeFraction = 0.6;
 
-  /// 보스 낙하 속도 배율. 일반 도형보다 훨씬 느리게 내려온다.
-  static const double bossFallSpeedFactor = 0.12;
+  /// 쌍둥이 보스 크기. 단일 보스보다 작다.
+  static const double twinBossSizeFraction = 0.38;
+
+  /// 쌍둥이 보스가 내려오는 가로 위치(낙하 구역 너비 대비).
+  static const List<double> twinBossXFractions = [0.25, 0.75];
+
+  /// 보스 낙하 속도(px/sec). 난이도와 무관한 고정값이다.
+  static const double bossFallSpeed = 18.0;
 
   /// 보스 등장 연출 길이.
   static const Duration bossIntroDuration = Duration(milliseconds: 1200);
@@ -61,10 +73,10 @@ class GameController extends ChangeNotifier {
   /// 스킬을 발동할 수 있는 최소 게이지.
   static const double skillMinGauge = 0.3;
 
-  /// 홀드 중 게이지 소모 속도(초당).
+  /// 스킬이 켜져 있는 동안의 게이지 소모 속도(초당).
   /// 플레이테스트에서 너무 빨리 닳는다는 피드백을 받아 기존 0.5에서
   /// 절반으로 낮춘 값 — 계속 플레이하며 다시 조정할 튜닝 포인트다.
-  static const double skillHoldDrainPerSecond = 0.25;
+  static const double skillDrainPerSecond = 0.25;
 
   /// 홀드 더블클리어에서 두 번째 클리어가 발동하기까지의 딜레이.
   static const Duration doubleClearDelay = Duration(seconds: 1);
@@ -112,7 +124,9 @@ class GameController extends ChangeNotifier {
   /// 0~1 콤보 게이지.
   double get comboGauge => _comboGauge;
   bool get isSkillReady => _comboGauge >= skillMinGauge;
-  bool get isSkillActive => _skillHeld && _comboGauge > 0;
+
+  /// 토글로 켜진 상태인지. 게이지가 바닥나면 자동으로 꺼진다.
+  bool get isSkillActive => _skillOn && _comboGauge > 0;
 
   Size get fieldSize => _fieldSize;
 
@@ -140,7 +154,13 @@ class GameController extends ChangeNotifier {
   double? _lastAppliedThreshold;
   double _damageFlash = 0;
   double _comboGauge = 0;
-  bool _skillHeld = false;
+  bool _skillOn = false;
+
+  /// 쌍둥이 보스를 이미 내보냈는지. 재소환 방지와 클리어 판정에 쓴다.
+  bool _twinBossesSpawned = false;
+
+  /// 남은 쪽 보스를 이미 보강했는지.
+  bool _twinBossReinforced = false;
 
   /// 홀드 더블클리어의 두 번째 클리어 예약.
   Duration _doubleClearRemaining = Duration.zero;
@@ -172,6 +192,12 @@ class GameController extends ChangeNotifier {
     _trySpawnBoss(dt);
 
     if (_applyMissedShapes()) {
+      notifyListeners();
+      return;
+    }
+
+    _updateTwinBossState();
+    if (_status != GameStatus.playing) {
       notifyListeners();
       return;
     }
@@ -208,10 +234,9 @@ class GameController extends ChangeNotifier {
   }
 
   void _tickSkill(double dtSeconds) {
-    if (!_skillHeld) return;
-    _comboGauge =
-        math.max(0, _comboGauge - skillHoldDrainPerSecond * dtSeconds);
-    if (_comboGauge == 0) _skillHeld = false;
+    if (!_skillOn) return;
+    _comboGauge = math.max(0, _comboGauge - skillDrainPerSecond * dtSeconds);
+    if (_comboGauge == 0) _skillOn = false;
   }
 
   /// 예약된 두 번째 클리어를 딜레이 후에 발동한다.
@@ -249,54 +274,118 @@ class GameController extends ChangeNotifier {
         continue;
       }
       if (shape.isCleared) continue;
-      final speed = shape.isBoss
-          ? params.fallSpeed * bossFallSpeedFactor
-          : params.fallSpeed;
+      // 보스는 난이도와 무관한 고정 속도로 내려온다.
+      final speed = shape.isBoss ? bossFallSpeed : params.fallSpeed;
       shape.y += speed * dtSeconds;
     }
     shapes.removeWhere((s) => s.isFinished);
   }
 
   void _trySpawn(DifficultyParams params) {
-    // 보스는 별도 규칙으로 관리하므로 일반 도형 정원에서 제외한다.
-    final aliveCount =
-        shapes.where((s) => !s.isBoss && !s.isCleared).length;
+    // 보스전 중에는 일반 도형 스폰을 멈추고, 보스가 정리되면 재개한다.
+    if (_hasLivingBoss) return;
+
+    final aliveCount = shapes.where((s) => !s.isBoss && !s.isCleared).length;
     if (_sinceLastSpawn.inMilliseconds < params.spawnIntervalMs) return;
     if (aliveCount >= params.maxSimultaneousShapes) return;
     _sinceLastSpawn = Duration.zero;
     shapes.add(_createShape());
   }
 
+  bool get _hasLivingBoss => shapes.any((s) => s.isBoss && !s.isCleared);
+
   /// 보스는 지정 난이도 이상에서, 화면에 하나도 없을 때만 등장한다.
   void _trySpawnBoss(Duration dt) {
     final bossFrom = runConfig.bossFromDifficulty;
     if (bossFrom == null || _difficultyLevel < bossFrom) return;
 
-    if (shapes.any((s) => s.isBoss)) {
+    if (_hasLivingBoss) {
       _bossCooldownRemaining = bossCooldown;
       return;
     }
+    // 쌍둥이 보스는 한 번만 등장한다(둘 다 잡으면 스테이지 클리어).
+    if (runConfig.bossKind == BossKind.twin && _twinBossesSpawned) return;
     if (_bossCooldownRemaining > Duration.zero) {
       _bossCooldownRemaining -= dt;
       return;
     }
-    shapes.add(_createBoss());
+
+    if (runConfig.bossKind == BossKind.twin) {
+      _spawnTwinBosses();
+      _twinBossesSpawned = true;
+    } else {
+      shapes.add(_createBoss(
+        layers: _buildLayerNames(bossLayers),
+        sizeFraction: bossSizeFraction,
+        xFraction: 0.5,
+      ));
+    }
   }
 
-  FallingShape _createBoss() {
-    final size =
-        math.min(_fieldSize.width, _fieldSize.height) * bossSizeFraction;
+  /// 좌우에서 동시에 내려오는 쌍둥이 보스. 두 보스는 서로 다른 도형
+  /// 시퀀스를 갖는다.
+  void _spawnTwinBosses() {
+    final first = _buildLayerNames(twinBossLayers);
+    var second = _buildLayerNames(twinBossLayers);
+    for (int attempt = 0; attempt < 8; attempt++) {
+      if (!_sameSequence(first, second)) break;
+      second = _buildLayerNames(twinBossLayers);
+    }
+
+    for (int i = 0; i < twinBossXFractions.length; i++) {
+      shapes.add(_createBoss(
+        layers: i == 0 ? first : second,
+        sizeFraction: twinBossSizeFraction,
+        xFraction: twinBossXFractions[i],
+      ));
+    }
+  }
+
+  static bool _sameSequence(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  FallingShape _createBoss({
+    required List<String> layers,
+    required double sizeFraction,
+    required double xFraction,
+  }) {
+    final size = math.min(_fieldSize.width, _fieldSize.height) * sizeFraction;
     return FallingShape(
       id: _nextShapeId++,
-      layers: _buildLayerNames(bossLayers),
-      // 화면 정중앙에서 내려온다.
-      x: _fieldSize.width / 2,
+      layers: layers,
+      // 좌우 이동 없이 지정된 가로 위치에서 수직으로만 하강한다.
+      x: _fieldSize.width * xFraction,
       y: -size / 2,
       size: size,
       color: ShapePalette.multiLayerColor,
       isBoss: true,
       introDuration: bossIntroDuration,
     );
+  }
+
+  /// 쌍둥이 중 한쪽이 먼저 쓰러지면 남은 쪽의 남은 층수를 늘리고,
+  /// 둘 다 쓰러지면 스테이지를 클리어한다.
+  void _updateTwinBossState() {
+    if (runConfig.bossKind != BossKind.twin || !_twinBossesSpawned) return;
+
+    final living = shapes.where((s) => s.isBoss && !s.isCleared).toList();
+
+    if (living.isEmpty) {
+      _status = GameStatus.cleared;
+      return;
+    }
+
+    if (living.length == 1 && !_twinBossReinforced) {
+      _twinBossReinforced = true;
+      final survivor = living.first;
+      // 이미 벗겨낸 층은 그대로 두고 남은 층만 다시 채운다.
+      survivor.setRemainingLayers(_buildLayerNames(twinBossReinforcedLayers));
+    }
   }
 
   FallingShape _createShape() {
@@ -457,10 +546,14 @@ class GameController extends ChangeNotifier {
     return best;
   }
 
-  void setSkillHeld(bool held) {
-    if (held && !isSkillReady) return;
-    if (_skillHeld == held) return;
-    _skillHeld = held;
+  /// 스킬을 켜고 끈다. 게이지가 최소치에 못 미치면 켤 수 없다.
+  void toggleSkill() {
+    if (_skillOn) {
+      _skillOn = false;
+    } else {
+      if (!isSkillReady) return;
+      _skillOn = true;
+    }
     notifyListeners();
   }
 
@@ -480,7 +573,9 @@ class GameController extends ChangeNotifier {
     _lastMissThreshold = null;
     _damageFlash = 0;
     _comboGauge = 0;
-    _skillHeld = false;
+    _skillOn = false;
+    _twinBossesSpawned = false;
+    _twinBossReinforced = false;
     _lastRecognition = null;
     _lastAppliedThreshold = null;
     _doubleClearRemaining = Duration.zero;

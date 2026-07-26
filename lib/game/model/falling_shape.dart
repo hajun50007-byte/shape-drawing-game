@@ -22,6 +22,9 @@ class FallingShape {
   final int id;
 
   /// index 0 = 가장 안쪽 레이어. 클리어는 바깥(마지막 index)부터 진행된다.
+  ///
+  /// 고정 길이가 아니다 — 쌍둥이 보스처럼 전투 중 남은 층수가 바뀌는
+  /// 경우가 있어 [setRemainingLayers]로 교체할 수 있다.
   final List<String> layers;
 
   final double x;
@@ -54,6 +57,21 @@ class FallingShape {
 
   /// 아직 남아 있는 가장 바깥 레이어의 index. 렌더링 시작점으로 쓴다.
   int get outermostRemainingIndex => layers.length - 1 - clearedLayers;
+
+  /// 아직 벗겨내지 않은 레이어 수.
+  int get remainingLayers => layers.length - clearedLayers;
+
+  /// 남은 레이어를 [names]로 통째로 교체한다(index 0 = 가장 안쪽).
+  /// 이미 벗겨낸 진행([clearedLayers])은 그대로 유지되고, 벗겨낸 레이어의
+  /// 이름은 렌더링·판정 어디에도 쓰이지 않으므로 자리만 채워둔다.
+  void setRemainingLayers(List<String> names) {
+    assert(names.isNotEmpty);
+    final peeled = layers.sublist(layers.length - clearedLayers);
+    layers
+      ..clear()
+      ..addAll(names)
+      ..addAll(peeled);
+  }
 
   /// 모든 레이어를 벗겨냈는지.
   bool get isCleared => clearedLayers >= layers.length;

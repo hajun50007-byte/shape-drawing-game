@@ -16,35 +16,101 @@ class DifficultyParams {
   });
 }
 
-/// 난이도 레벨(1~7) -> 구체 파라미터 매핑.
+/// 난이도 레벨(1~10) -> 구체 파라미터 매핑.
 /// 레벨 사이는 선형 보간(lerp)으로 매끄럽게 연결한다.
+///
+/// 난이도 곡선은 두 구간으로 나뉜다:
+/// - 전반: 낙하 속도만 올라가며 어려워진다("빨라짐"). 동시 등장 개수는
+///   [baseSimultaneousShapes]로 고정.
+/// - 후반: 낙하 속도가 최대치의 [shapeRampSpeedRatio]에 도달한 시점부터
+///   레벨 [shapeRampEndLevel]까지 동시 등장 개수가 늘어난다("많아짐").
 class DifficultyTable {
+  /// 후반 구간에 들어가기 전까지 유지되는 동시 등장 개수.
+  static const int baseSimultaneousShapes = 2;
+
+  /// 동시 등장 개수 상한. 기존 최대치(4)를 기준으로, 램프 구간이 레벨 10까지
+  /// 늘어난 만큼 상향한 값이다.
+  static const int simultaneousShapesCap = 6;
+
+  /// 최대 낙하 속도 대비 이 비율에 도달하면 개수 램프가 시작된다.
+  static const double shapeRampSpeedRatio = 0.65;
+
+  /// 개수 램프가 상한에 도달하는 레벨.
+  static const double shapeRampEndLevel = 10;
+
+  /// 개수는 아래 [paramsFor]에서 계산하므로 앵커의 maxSimultaneousShapes는
+  /// 전부 기본값으로 두고 보간에 쓰지 않는다.
   static const Map<int, DifficultyParams> _anchors = {
     1: DifficultyParams(
         fallSpeed: 80,
         spawnIntervalMs: 1800,
-        maxSimultaneousShapes: 2,
+        maxSimultaneousShapes: baseSimultaneousShapes,
         recognitionThreshold: 60),
     3: DifficultyParams(
         fallSpeed: 120,
         spawnIntervalMs: 1400,
-        maxSimultaneousShapes: 3,
+        maxSimultaneousShapes: baseSimultaneousShapes,
         recognitionThreshold: 64),
     5: DifficultyParams(
         fallSpeed: 160,
         spawnIntervalMs: 1000,
-        maxSimultaneousShapes: 3,
+        maxSimultaneousShapes: baseSimultaneousShapes,
         recognitionThreshold: 68),
+    // 최대 낙하 속도는 기존 값(200)을 그대로 유지한다.
     7: DifficultyParams(
         fallSpeed: 200,
         spawnIntervalMs: 800,
-        maxSimultaneousShapes: 4,
+        maxSimultaneousShapes: baseSimultaneousShapes,
+        recognitionThreshold: 72),
+    // 7~10 구간은 속도를 더 올리지 않고 개수로만 어려워진다.
+    10: DifficultyParams(
+        fallSpeed: 200,
+        spawnIntervalMs: 700,
+        maxSimultaneousShapes: baseSimultaneousShapes,
         recognitionThreshold: 72),
   };
+
+  /// 앵커에 등장하는 최대 낙하 속도.
+  static final double maxFallSpeed = _anchors.values
+      .map((p) => p.fallSpeed)
+      .reduce((a, b) => a > b ? a : b);
+
+  /// 개수 램프가 시작되는 낙하 속도.
+  static final double shapeRampStartSpeed = maxFallSpeed * shapeRampSpeedRatio;
+
+  /// 개수 램프가 시작되는 레벨(낙하 속도로부터 역산).
+  static final double shapeRampStartLevel =
+      _levelForFallSpeed(shapeRampStartSpeed);
 
   /// level은 정수/소수 모두 허용 (예: 스테이지 내부에서 시간 경과에 따라
   /// 2.3, 2.7처럼 점진 상승시킬 때 사용)
   static DifficultyParams paramsFor(double level) {
+    final interpolated = _interpolate(level);
+    return DifficultyParams(
+      fallSpeed: interpolated.fallSpeed,
+      spawnIntervalMs: interpolated.spawnIntervalMs,
+      maxSimultaneousShapes:
+          simultaneousShapesFor(level, interpolated.fallSpeed),
+      recognitionThreshold: interpolated.recognitionThreshold,
+    );
+  }
+
+  /// 낙하 속도가 램프 시작점에 못 미치면 기본 개수를 유지하고, 넘어서면
+  /// [shapeRampEndLevel]까지 상한값을 향해 선형으로 늘린다.
+  static int simultaneousShapesFor(double level, double fallSpeed) {
+    if (fallSpeed < shapeRampStartSpeed) return baseSimultaneousShapes;
+    if (level >= shapeRampEndLevel) return simultaneousShapesCap;
+    if (shapeRampEndLevel <= shapeRampStartLevel) return simultaneousShapesCap;
+
+    final t = ((level - shapeRampStartLevel) /
+            (shapeRampEndLevel - shapeRampStartLevel))
+        .clamp(0.0, 1.0);
+    return (baseSimultaneousShapes +
+            (simultaneousShapesCap - baseSimultaneousShapes) * t)
+        .round();
+  }
+
+  static DifficultyParams _interpolate(double level) {
     final keys = _anchors.keys.toList()..sort();
     if (level <= keys.first) return _anchors[keys.first]!;
     if (level >= keys.last) return _anchors[keys.last]!;
@@ -66,12 +132,25 @@ class DifficultyTable {
       spawnIntervalMs: _lerp(
               a.spawnIntervalMs.toDouble(), b.spawnIntervalMs.toDouble(), t)
           .round(),
-      maxSimultaneousShapes: _lerp(a.maxSimultaneousShapes.toDouble(),
-              b.maxSimultaneousShapes.toDouble(), t)
-          .round(),
+      maxSimultaneousShapes: baseSimultaneousShapes,
       recognitionThreshold:
           _lerp(a.recognitionThreshold, b.recognitionThreshold, t),
     );
+  }
+
+  /// 주어진 낙하 속도에 처음 도달하는 레벨을 앵커에서 역산한다.
+  static double _levelForFallSpeed(double speed) {
+    final keys = _anchors.keys.toList()..sort();
+    for (int i = 0; i < keys.length - 1; i++) {
+      final a = _anchors[keys[i]]!.fallSpeed;
+      final b = _anchors[keys[i + 1]]!.fallSpeed;
+      if (a == b) continue;
+      if (speed >= a && speed <= b) {
+        final t = (speed - a) / (b - a);
+        return keys[i] + (keys[i + 1] - keys[i]) * t;
+      }
+    }
+    return keys.first.toDouble();
   }
 
   /// 도형별 통과 기준 보정값(점). 음수면 그만큼 통과가 쉬워진다.
@@ -89,6 +168,15 @@ class DifficultyTable {
   }
 
   static double _lerp(double a, double b, double t) => a + (b - a) * t;
+}
+
+/// 보스 등장 형태.
+enum BossKind {
+  /// 큰 보스 하나가 화면 정중앙에서 내려온다.
+  single,
+
+  /// 조금 작은 보스 둘이 화면 좌우에서 동시에 내려온다.
+  twin,
 }
 
 /// 스테이지 모드와 레이드 모드가 공유하는 실행 설정.
@@ -112,6 +200,9 @@ class RunConfig {
   /// 스테이지·레이드 모두 같은 규칙으로 동작한다.
   final double? bossFromDifficulty;
 
+  /// 보스 등장 형태. [bossFromDifficulty]가 null이면 의미 없다.
+  final BossKind bossKind;
+
   /// 구간 테마. null이면 minDifficulty로부터 자동 선택한다.
   final StageTheme? theme;
 
@@ -124,6 +215,7 @@ class RunConfig {
     this.maxLayers = 1,
     this.multiLayerChance = 0,
     this.bossFromDifficulty,
+    this.bossKind = BossKind.single,
     this.theme,
   });
 
@@ -199,6 +291,19 @@ class RunPresets {
     startLives: startLives,
     maxLayers: 2,
     multiLayerChance: 0.6,
+  );
+
+  /// 쌍둥이 보스 스테이지(10단계).
+  /// 시간 제한 없이 두 보스를 모두 제거해야 클리어된다.
+  static const stage10 = RunConfig(
+    id: 'stage_10',
+    minDifficulty: 10,
+    maxDifficulty: 10,
+    duration: null,
+    startLives: startLives,
+    bossFromDifficulty: 10,
+    bossKind: BossKind.twin,
+    theme: StageTheme.accelerationLine,
   );
 
   /// 보스가 처음 등장하는 난이도. 스테이지·레이드 공통.

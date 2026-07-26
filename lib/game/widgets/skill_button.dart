@@ -1,21 +1,21 @@
 import 'package:flutter/material.dart';
 
-/// 홀드 더블클리어 액티브 스킬 버튼 + 콤보 게이지.
-/// 게이지가 최소치 이상 차야 누를 수 있고, 누르고 있는 동안 게이지가
-/// 소모된다. (별도 캐릭터/아이콘 없이 버튼과 게이지로만 표시)
+/// 더블클리어 액티브 스킬 버튼 + 콤보 게이지.
+/// 한 번 누르면 켜진 채로 유지되며 게이지가 소모되고, 다시 누르면 꺼진다.
+/// (별도 캐릭터/아이콘 없이 버튼과 게이지로만 표시)
 class SkillButton extends StatelessWidget {
   const SkillButton({
     super.key,
     required this.gauge,
     required this.isReady,
     required this.isActive,
-    required this.onHoldChanged,
+    required this.onToggle,
   });
 
   final double gauge;
   final bool isReady;
   final bool isActive;
-  final ValueChanged<bool> onHoldChanged;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
@@ -43,9 +43,7 @@ class SkillButton extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         GestureDetector(
-          onTapDown: isReady ? (_) => onHoldChanged(true) : null,
-          onTapUp: (_) => onHoldChanged(false),
-          onTapCancel: () => onHoldChanged(false),
+          onTap: (isReady || isActive) ? onToggle : null,
           child: Container(
             width: 76,
             height: 44,
@@ -56,9 +54,9 @@ class SkillButton extends StatelessWidget {
               border: Border.all(color: color, width: 2),
             ),
             child: Text(
-              '홀드',
+              isActive ? '2배 ON' : '2배',
               style: TextStyle(
-                color: isReady ? Colors.white : Colors.white38,
+                color: (isReady || isActive) ? Colors.white : Colors.white38,
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),

@@ -41,6 +41,8 @@ class HomeScreen extends StatelessWidget {
                   const _ModeButton(label: '4단계 · 다층', config: RunPresets.stage4),
                   const _ModeButton(
                       label: '5단계 · 보스 등장', config: RunPresets.stage5),
+                  const _ModeButton(
+                      label: '10단계 · 쌍둥이 보스', config: RunPresets.stage10),
                   const SizedBox(height: 24),
                   const _SectionLabel('특별 스테이지'),
                   const _ModeButton(

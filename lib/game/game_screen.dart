@@ -124,7 +124,7 @@ class _GameScreenState extends State<GameScreen>
                       gauge: _controller.comboGauge,
                       isReady: _controller.isSkillReady,
                       isActive: _controller.isSkillActive,
-                      onHoldChanged: _controller.setSkillHeld,
+                      onToggle: _controller.toggleSkill,
                     ),
                   ),
                   Positioned(

@@ -129,14 +129,46 @@ void main() {
     });
   });
 
-  group('홀드 더블클리어 스킬', () {
-    test('게이지가 부족하면 홀드되지 않는다', () {
+  group('토글 더블클리어 스킬', () {
+    test('게이지가 부족하면 켜지지 않는다', () {
       final controller = _controllerFor(RunPresets.stage1);
-      controller.setSkillHeld(true);
+      controller.toggleSkill();
       expect(controller.isSkillActive, isFalse);
     });
 
-    test('홀드 중 성공하면 다른 그룹까지 두 번 클리어된다', () {
+    test('다시 누르면 꺼진다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1),
+        _shape(['circle'], id: 2),
+        _shape(['circle'], id: 3),
+      ]);
+      _draw(controller, 'circle');
+
+      controller.toggleSkill();
+      expect(controller.isSkillActive, isTrue);
+      controller.toggleSkill();
+      expect(controller.isSkillActive, isFalse);
+    });
+
+    test('게이지가 바닥나면 자동으로 꺼진다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1),
+        _shape(['circle'], id: 2),
+        _shape(['circle'], id: 3),
+      ]);
+      _draw(controller, 'circle');
+      controller.toggleSkill();
+      expect(controller.isSkillActive, isTrue);
+
+      // 게이지를 다 태울 만큼 시간을 흘린다.
+      controller.update(const Duration(seconds: 5));
+      expect(controller.comboGauge, 0);
+      expect(controller.isSkillActive, isFalse);
+    });
+
+    test('켜진 상태에서 성공하면 다른 그룹까지 두 번 클리어된다', () {
       final controller = _controllerFor(RunPresets.stage1);
 
       // 게이지를 최소 발동치(0.3) 이상으로 채운다.
@@ -156,7 +188,7 @@ void main() {
         _shape(['circle'], id: 4, y: 100),
         _shape(['square'], id: 5, y: 300),
       ]);
-      controller.setSkillHeld(true);
+      controller.toggleSkill();
       expect(controller.isSkillActive, isTrue);
 
       _draw(controller, 'circle');
@@ -172,7 +204,7 @@ void main() {
       expect(GameController.doubleClearDelay, const Duration(seconds: 1));
     });
 
-    test('홀드 중에는 게이지가 소모된다', () {
+    test('켜져 있는 동안 게이지가 소모된다', () {
       final controller = _controllerFor(RunPresets.stage1);
       controller.shapes.addAll([
         _shape(['circle'], id: 1),
@@ -182,7 +214,7 @@ void main() {
       _draw(controller, 'circle');
 
       final before = controller.comboGauge;
-      controller.setSkillHeld(true);
+      controller.toggleSkill();
       controller.update(const Duration(milliseconds: 500));
 
       expect(controller.comboGauge, lessThan(before));
@@ -230,6 +262,38 @@ void main() {
       expect(controller.shapes.where((s) => s.isBoss).length, lessThanOrEqualTo(1));
     });
 
+    test('보스가 떠 있는 동안 일반 도형 스폰이 멈추고, 정리되면 재개된다', () {
+      final controller = _controllerFor(RunPresets.stage5);
+      controller.update(const Duration(milliseconds: 16));
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+
+      // 보스전 동안에는 일반 도형이 늘지 않는다.
+      for (int i = 0; i < 100; i++) {
+        controller.update(const Duration(milliseconds: 50));
+      }
+      expect(controller.shapes.where((s) => !s.isBoss), isEmpty);
+
+      // 보스를 없애면 다시 스폰이 재개된다.
+      controller.shapes.remove(boss);
+      for (int i = 0; i < 100; i++) {
+        controller.update(const Duration(milliseconds: 50));
+      }
+      expect(controller.shapes.any((s) => !s.isBoss), isTrue);
+    });
+
+    test('보스 낙하 속도는 난이도와 무관한 고정값이다', () {
+      final controller = _controllerFor(RunPresets.stage5);
+      controller.update(const Duration(milliseconds: 16));
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+
+      // 등장 연출을 끝낸다.
+      controller.update(GameController.bossIntroDuration);
+      final start = boss.y;
+      controller.update(const Duration(seconds: 1));
+
+      expect(boss.y - start, closeTo(GameController.bossFallSpeed, 1.0));
+    });
+
     test('보스가 없는 스테이지에서는 등장하지 않는다', () {
       final controller = _controllerFor(RunPresets.stage1);
       for (int i = 0; i < 200; i++) {
@@ -265,6 +329,126 @@ void main() {
           DifficultyTable.paramsFor(RunPresets.stage1.minDifficulty)
                   .recognitionThreshold -
               8);
+    });
+  });
+
+  group('쌍둥이 보스', () {
+    List<FallingShape> twinsOf(GameController c) =>
+        c.shapes.where((s) => s.isBoss).toList();
+
+    GameController spawnedTwins() {
+      final controller = _controllerFor(RunPresets.stage10);
+      controller.update(const Duration(milliseconds: 16));
+      return controller;
+    }
+
+    test('7층짜리 둘이 좌우에서 동시에 등장한다', () {
+      final controller = spawnedTwins();
+      final twins = twinsOf(controller);
+
+      expect(twins.length, 2);
+      for (final t in twins) {
+        expect(t.layers.length, GameController.twinBossLayers);
+        expect(t.layers.length, 7);
+      }
+      // 좌측 25% / 우측 75% 지점.
+      expect(twins.map((t) => t.x), unorderedEquals([100.0, 300.0]));
+    });
+
+    test('5단계 보스보다 작다', () {
+      final single = _controllerFor(RunPresets.stage5)
+        ..update(const Duration(milliseconds: 16));
+      final twin = spawnedTwins();
+
+      final singleSize = single.shapes.firstWhere((s) => s.isBoss).size;
+      expect(twinsOf(twin).first.size, lessThan(singleSize));
+    });
+
+    test('두 보스의 도형 시퀀스가 서로 다르다', () {
+      final twins = twinsOf(spawnedTwins());
+      expect(twins[0].layers, isNot(equals(twins[1].layers)));
+    });
+
+    test('좌우 이동 없이 수직으로만 하강한다', () {
+      final controller = spawnedTwins();
+      final twins = twinsOf(controller);
+      final xs = twins.map((t) => t.x).toList();
+
+      controller.update(GameController.bossIntroDuration);
+      controller.update(const Duration(seconds: 2));
+
+      expect(twins.map((t) => t.x).toList(), xs);
+    });
+
+    test('한쪽이 먼저 쓰러지면 남은 쪽의 남은 층수가 10층으로 늘어난다', () {
+      final controller = spawnedTwins();
+      final twins = twinsOf(controller);
+      final victim = twins[0];
+      final survivor = twins[1];
+
+      // 남은 쪽에서 두 층을 미리 벗겨 진행도를 만들어 둔다.
+      survivor.clearedLayers = 2;
+      expect(survivor.remainingLayers, 5);
+
+      // 한쪽을 전부 제거한다.
+      victim.clearedLayers = victim.layers.length;
+      controller.update(const Duration(milliseconds: 16));
+
+      expect(survivor.remainingLayers, GameController.twinBossReinforcedLayers);
+      expect(survivor.clearedLayers, 2, reason: '이미 진행된 층은 유지된다');
+      expect(controller.status, GameStatus.playing);
+    });
+
+    test('둘 다 제거해야 스테이지가 클리어된다', () {
+      final controller = spawnedTwins();
+      final twins = twinsOf(controller);
+
+      twins[0].clearedLayers = twins[0].layers.length;
+      controller.update(const Duration(milliseconds: 16));
+      expect(controller.status, GameStatus.playing,
+          reason: '한쪽만 제거해서는 클리어되지 않는다');
+
+      final survivor =
+          controller.shapes.firstWhere((s) => s.isBoss && !s.isCleared);
+      survivor.clearedLayers = survivor.layers.length;
+      controller.update(const Duration(milliseconds: 16));
+
+      expect(controller.status, GameStatus.cleared);
+    });
+  });
+
+  group('난이도 곡선', () {
+    test('낙하 속도가 최대치의 65%에 못 미치면 동시 등장 개수가 기본값', () {
+      final rampSpeed = DifficultyTable.shapeRampStartSpeed;
+      expect(rampSpeed, closeTo(DifficultyTable.maxFallSpeed * 0.65, 1e-9));
+
+      for (final level in [1.0, 2.0, 3.0]) {
+        final params = DifficultyTable.paramsFor(level);
+        expect(params.fallSpeed, lessThan(rampSpeed));
+        expect(params.maxSimultaneousShapes,
+            DifficultyTable.baseSimultaneousShapes);
+      }
+    });
+
+    test('65%를 넘어서면 레벨 10까지 개수가 단조 증가해 상한에 도달한다', () {
+      final startLevel = DifficultyTable.shapeRampStartLevel;
+      // 80 -> 200 구간에서 130(65%)은 레벨 3.5.
+      expect(startLevel, closeTo(3.5, 1e-9));
+
+      var previous = DifficultyTable.baseSimultaneousShapes;
+      for (double level = startLevel; level <= 10.0; level += 0.5) {
+        final count = DifficultyTable.paramsFor(level).maxSimultaneousShapes;
+        expect(count, greaterThanOrEqualTo(previous), reason: 'level $level');
+        previous = count;
+      }
+      expect(DifficultyTable.paramsFor(10).maxSimultaneousShapes,
+          DifficultyTable.simultaneousShapesCap);
+    });
+
+    test('최대 낙하 속도는 기존 값(200)을 유지한다', () {
+      expect(DifficultyTable.maxFallSpeed, 200);
+      expect(DifficultyTable.paramsFor(7).fallSpeed, 200);
+      expect(DifficultyTable.paramsFor(10).fallSpeed, 200);
     });
   });
 
