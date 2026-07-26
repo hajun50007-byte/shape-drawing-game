@@ -95,7 +95,7 @@ class GameController extends ChangeNotifier {
   double? get lastMissScore => _lastMissScore;
   double? get lastMissThreshold => _lastMissThreshold;
 
-  /// 마지막으로 인식한 결과. extent 페널티 곡선을 튜닝하기 위한 디버그
+  /// 마지막으로 인식한 결과. 반지름 비율 페널티 곡선을 튜닝하기 위한 디버그
   /// 오버레이에서 읽는다(릴리즈 빌드에서는 표시되지 않는다).
   core.RecognitionResult? get lastRecognition => _lastRecognition;
 

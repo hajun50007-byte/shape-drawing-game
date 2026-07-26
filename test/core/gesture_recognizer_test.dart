@@ -43,7 +43,7 @@ void main() {
       }
     });
 
-    test('extent 게이트: 사각형을 그리면 원으로 오인식되지 않는다', () {
+    test('사각형을 그리면 원으로 오인식되지 않는다', () {
       final recognizer = UnistrokeRecognizer(ShapeTemplates.all);
 
       // 시작점을 옮겨 그린 사각형(모서리가 아닌 변 중간부터 시작).
@@ -57,23 +57,38 @@ void main() {
       expect(result.name, 'square');
     });
 
-    test('extent 페널티 곡선은 start~end 사이에서 선형으로 감소한다', () {
-      const start = UnistrokeRecognizer.extentPenaltyStart;
-      const end = UnistrokeRecognizer.extentPenaltyEnd;
+    test('반지름 비율 페널티 곡선은 start~end 사이에서 선형으로 감소한다', () {
+      const start = UnistrokeRecognizer.ratioPenaltyStart;
+      const end = UnistrokeRecognizer.ratioPenaltyEnd;
 
       // 현재 튜닝값. 바꿀 때 의도적으로 바꾸도록 고정해둔다.
-      expect(start, 0.22);
-      expect(end, 0.55);
+      expect(start, 0.15);
+      expect(end, 0.45);
 
-      expect(UnistrokeRecognizer.extentPenalty(0), 1.0);
-      expect(UnistrokeRecognizer.extentPenalty(start), 1.0);
-      expect(UnistrokeRecognizer.extentPenalty(end), 0.0);
-      expect(UnistrokeRecognizer.extentPenalty(end + 0.2), 0.0);
-      expect(UnistrokeRecognizer.extentPenalty((start + end) / 2),
+      expect(UnistrokeRecognizer.ratioPenalty(0), 1.0);
+      expect(UnistrokeRecognizer.ratioPenalty(start), 1.0);
+      expect(UnistrokeRecognizer.ratioPenalty(end), 0.0);
+      expect(UnistrokeRecognizer.ratioPenalty(end + 0.2), 0.0);
+      expect(UnistrokeRecognizer.ratioPenalty((start + end) / 2),
           closeTo(0.5, 1e-9));
     });
 
-    test('느슨한 범위에서 원-사각형은 서로 감점하지 않는다', () {
+    test('대각선-십자 비율이 도형별로 뚜렷하게 갈린다', () {
+      final recognizer = UnistrokeRecognizer(ShapeTemplates.all);
+
+      double ratioOf(String name) => recognizer
+          .recognize(ShapeTemplates.all.firstWhere((t) => t.name == name).points)
+          .candidateRatio;
+
+      // 원은 모든 방향의 반지름이 같아 1에 수렴하고,
+      // 사각형은 모서리가 변보다 √2배 멀어 1.4 근처가 된다.
+      expect(ratioOf('circle'), closeTo(1.0, 0.05));
+      expect(ratioOf('square'), greaterThan(1.3));
+      expect(ratioOf('square') - ratioOf('circle'),
+          greaterThan(UnistrokeRecognizer.ratioPenaltyStart));
+    });
+
+    test('사각형을 그리면 원 후보가 비율 페널티로 크게 깎인다', () {
       final recognizer = UnistrokeRecognizer(ShapeTemplates.all);
       final result = recognizer.recognize(ShapeTemplates.square.points);
 
@@ -83,23 +98,15 @@ void main() {
 
       final square = result.evaluations.firstWhere((e) => e.name == 'square');
       final circle = result.evaluations.firstWhere((e) => e.name == 'circle');
-      final triangle =
-          result.evaluations.firstWhere((e) => e.name == 'triangle');
 
-      // 원-사각형 extent 차이(≈0.214)는 start(0.22) 안이라 둘 다 감점 없음.
-      // 즉 이 둘의 구분은 순환정렬 기본 점수가 담당한다.
-      expect(circle.extentDiff, lessThan(UnistrokeRecognizer.extentPenaltyStart));
-      expect(circle.penalty, 1.0);
-      expect(square.penalty, 1.0);
-      expect(circle.baseScore, lessThan(square.baseScore));
       expect(result.name, 'square');
-
-      // 삼각형처럼 명백히 다른 도형만 extent로 걸러진다.
-      expect(triangle.penalty, lessThan(0.5));
-      expect(triangle.finalScore, lessThan(square.finalScore));
+      expect(square.penalty, 1.0);
+      // 원은 비율 차이(≈0.36)로 감점돼 기본 점수만 볼 때보다 훨씬 벌어진다.
+      expect(circle.penalty, lessThan(0.5));
+      expect(circle.finalScore, lessThan(square.finalScore / 2));
     });
 
-    test('면적이 없는 직선은 통과 기준에 한참 못 미치는 점수만 받는다', () {
+    test('면적이 없는 직선은 어떤 템플릿과도 비율이 달라 unknown', () {
       final recognizer = UnistrokeRecognizer(ShapeTemplates.all);
 
       final line = [
@@ -107,9 +114,8 @@ void main() {
       ];
 
       final result = recognizer.recognize(line);
-      // 느슨해진 범위에서는 삼각형 페널티가 완전히 0이 되지 않아 이름이
-      // 붙을 수 있지만, 어떤 난이도의 통과 기준(52~72)에도 못 미친다.
-      expect(result.score, lessThan(20));
+      expect(result.name, 'unknown');
+      expect(result.score, 0);
     });
   });
 }

@@ -20,15 +20,18 @@ class ShapeTemplate {
   const ShapeTemplate(this.name, this.points);
 }
 
-/// 템플릿 하나에 대한 채점 내역. 디버그 오버레이에서 extent 페널티 곡선을
+/// 템플릿 하나에 대한 채점 내역. 디버그 오버레이에서 페널티 곡선을
 /// 튜닝할 때 쓰인다.
 class TemplateEvaluation {
   final String name;
 
-  /// 후보와 이 템플릿의 extent 차이.
-  final double extentDiff;
+  /// 이 템플릿의 대각선-십자 반지름 비율.
+  final double templateRatio;
 
-  /// extentDiff로부터 계산된 0~1 배율.
+  /// 후보와 이 템플릿의 비율 차이.
+  final double ratioDiff;
+
+  /// ratioDiff로부터 계산된 0~1 배율.
   final double penalty;
 
   /// 궤적 거리만으로 계산한 0~100 점수.
@@ -39,7 +42,8 @@ class TemplateEvaluation {
 
   const TemplateEvaluation({
     required this.name,
-    required this.extentDiff,
+    required this.templateRatio,
+    required this.ratioDiff,
     required this.penalty,
     required this.baseScore,
     required this.finalScore,
@@ -50,8 +54,8 @@ class RecognitionResult {
   final String name;
   final double score; // 0~100, 높을수록 유사
 
-  /// 후보 궤적의 extent(면적 ÷ 바운딩박스 면적).
-  final double candidateExtent;
+  /// 후보 궤적의 대각선-십자 반지름 비율.
+  final double candidateRatio;
 
   /// 템플릿별 채점 내역(디버그용).
   final List<TemplateEvaluation> evaluations;
@@ -59,7 +63,7 @@ class RecognitionResult {
   const RecognitionResult(
     this.name,
     this.score, {
-    this.candidateExtent = 0,
+    this.candidateRatio = 0,
     this.evaluations = const [],
   });
 }
@@ -70,28 +74,33 @@ class UnistrokeRecognizer {
   static final double _halfDiagonal =
       0.5 * math.sqrt(_squareSize * _squareSize * 2);
 
-  /// extent(면적 ÷ 바운딩박스 면적) 차이가 이 값 이하면 감점 없음.
-  /// 원≈0.785 / 사각형≈1.0 / 삼각형≈0.5.
+  /// 대각선/십자 방향 반지름을 잴 때 각 방향에서 허용하는 각도 반경(도).
+  static const double _radiusSampleHalfWindow = 15.0;
+
+  /// 대각선 방향(모서리가 있는 쪽).
+  static const List<double> _cornerDirections = [45, 135, 225, 315];
+
+  /// 십자 방향(변의 중앙이 있는 쪽).
+  static const List<double> _edgeDirections = [0, 90, 180, 270];
+
+  /// 대각선-십자 반지름 비율 차이가 이 값 이하면 감점 없음.
   ///
+  /// 이 지표는 "모서리가 변 중앙보다 얼마나 더 멀리 튀어나와 있나"를 재기
+  /// 때문에 원(≈1.0)과 사각형(≈1.41)을 뚜렷하게 갈라준다.
   /// 하드 컷이 아니라 소프트 페널티라, 애매하게 그린 도형도 점수만 깎이고
   /// 후보로는 남는다. 두 상수는 디버그 오버레이를 보며 튜닝하는 값이다.
-  ///
-  /// 현재 범위는 의도적으로 느슨하다: 원-사각형 차이(≈0.21)가 start 안에
-  /// 들어와 서로 감점하지 않으므로, 둘의 구분은 순환정렬 기본 점수에 맡기고
-  /// extent는 삼각형처럼 명백히 다른 도형만 걸러낸다.
-  static const double extentPenaltyStart = 0.22;
+  static const double ratioPenaltyStart = 0.15;
 
   /// 이 차이 이상이면 페널티가 0(사실상 후보에서 탈락).
-  static const double extentPenaltyEnd = 0.55;
+  static const double ratioPenaltyEnd = 0.45;
 
-  /// extent 차이에 따른 0~1 배율. start 이하면 1, end 이상이면 0,
+  /// 반지름 비율 차이에 따른 0~1 배율. start 이하면 1, end 이상이면 0,
   /// 그 사이는 선형으로 감소한다.
-  static double extentPenalty(double extentDiff) {
-    if (extentDiff <= extentPenaltyStart) return 1.0;
-    if (extentDiff >= extentPenaltyEnd) return 0.0;
+  static double ratioPenalty(double ratioDiff) {
+    if (ratioDiff <= ratioPenaltyStart) return 1.0;
+    if (ratioDiff >= ratioPenaltyEnd) return 0.0;
     return 1.0 -
-        (extentDiff - extentPenaltyStart) /
-            (extentPenaltyEnd - extentPenaltyStart);
+        (ratioDiff - ratioPenaltyStart) / (ratioPenaltyEnd - ratioPenaltyStart);
   }
 
   final List<ShapeTemplate> _normalizedTemplates;
@@ -101,8 +110,9 @@ class UnistrokeRecognizer {
   // 비교해 더 가까운 쪽을 사용한다. _normalizedTemplates와 인덱스가 대응한다.
   late final List<List<Point>> _reversedTemplatePoints;
 
-  /// 각 템플릿의 extent. 정규화된 좌표 기준으로 미리 계산해둔다.
-  late final List<double> _templateExtents;
+  /// 각 템플릿의 대각선-십자 반지름 비율. 정규화된 좌표 기준으로 미리
+  /// 계산해둔다.
+  late final List<double> _templateRatios;
 
   UnistrokeRecognizer(List<ShapeTemplate> rawTemplates)
       : _normalizedTemplates = rawTemplates
@@ -110,8 +120,8 @@ class UnistrokeRecognizer {
             .toList() {
     _reversedTemplatePoints =
         _normalizedTemplates.map((t) => t.points.reversed.toList()).toList();
-    _templateExtents =
-        _normalizedTemplates.map((t) => _extentOf(t.points)).toList();
+    _templateRatios =
+        _normalizedTemplates.map((t) => _cornerEdgeRatioOf(t.points)).toList();
   }
 
   /// 손가락 궤적(raw)을 등록된 템플릿과 비교
@@ -120,7 +130,7 @@ class UnistrokeRecognizer {
       return const RecognitionResult('unknown', 0);
     }
     final candidate = _normalize(rawPoints);
-    final candidateExtent = _extentOf(candidate);
+    final candidateRatio = _cornerEdgeRatioOf(candidate);
 
     final evaluations = <TemplateEvaluation>[];
     String bestName = 'unknown';
@@ -135,13 +145,15 @@ class UnistrokeRecognizer {
 
       final baseScore =
           math.max(0.0, (1 - distance / _halfDiagonal) * 100).toDouble();
-      final extentDiff = (candidateExtent - _templateExtents[i]).abs();
-      final penalty = extentPenalty(extentDiff);
+      final templateRatio = _templateRatios[i];
+      final ratioDiff = (candidateRatio - templateRatio).abs();
+      final penalty = ratioPenalty(ratioDiff);
       final finalScore = baseScore * penalty;
 
       evaluations.add(TemplateEvaluation(
         name: t.name,
-        extentDiff: extentDiff,
+        templateRatio: templateRatio,
+        ratioDiff: ratioDiff,
         penalty: penalty,
         baseScore: baseScore,
         finalScore: finalScore,
@@ -158,7 +170,7 @@ class UnistrokeRecognizer {
       return RecognitionResult(
         'unknown',
         0,
-        candidateExtent: candidateExtent,
+        candidateRatio: candidateRatio,
         evaluations: evaluations,
       );
     }
@@ -166,33 +178,69 @@ class UnistrokeRecognizer {
     return RecognitionResult(
       bestName,
       bestScore,
-      candidateExtent: candidateExtent,
+      candidateRatio: candidateRatio,
       evaluations: evaluations,
     );
   }
 
-  /// 신발끈 공식으로 구한 도형 면적 ÷ 바운딩박스 면적.
-  /// 마지막 점과 첫 점을 잇는 닫힌 다각형으로 취급한다.
-  static double _extentOf(List<Point> points) {
-    double doubleArea = 0;
-    for (int i = 0; i < points.length; i++) {
-      final a = points[i];
-      final b = points[(i + 1) % points.length];
-      doubleArea += a.x * b.y - b.x * a.y;
-    }
-    final area = doubleArea.abs() / 2;
+  /// 대각선-십자 반지름 비율.
+  ///
+  /// 정규화 마지막 단계에서 중심이 원점으로 옮겨져 있으므로, 중심에서 각
+  /// 점까지의 각도와 거리를 그대로 쓸 수 있다. 대각선 네 방향(45/135/225/
+  /// 315도)에서 가장 먼 점까지의 거리 평균을 십자 네 방향(0/90/180/270도)의
+  /// 평균으로 나눈다.
+  ///
+  /// 모서리가 뾰족할수록 커진다: 원≈1.0, 사각형≈1.41.
+  static double _cornerEdgeRatioOf(List<Point> points) {
+    final cornerRadius = _averageMaxRadius(points, _cornerDirections);
+    final edgeRadius = _averageMaxRadius(points, _edgeDirections);
+    if (edgeRadius <= 0) return 0;
+    return cornerRadius / edgeRadius;
+  }
 
-    double minX = double.infinity, minY = double.infinity;
-    double maxX = -double.infinity, maxY = -double.infinity;
-    for (final p in points) {
-      minX = math.min(minX, p.x);
-      minY = math.min(minY, p.y);
-      maxX = math.max(maxX, p.x);
-      maxY = math.max(maxY, p.y);
+  /// 주어진 방향들 각각에 대해 ±[_radiusSampleHalfWindow] 안에 들어오는
+  /// 점 중 가장 먼 거리를 구하고, 그 값들의 평균을 낸다.
+  /// 어떤 점도 없는 방향은 평균에서 제외한다.
+  static double _averageMaxRadius(
+    List<Point> points,
+    List<double> directions,
+  ) {
+    double sum = 0;
+    int counted = 0;
+
+    for (final direction in directions) {
+      double maxRadius = 0;
+      bool found = false;
+      for (final p in points) {
+        if (_angularDistance(_angleDegrees(p), direction) >
+            _radiusSampleHalfWindow) {
+          continue;
+        }
+        final radius = math.sqrt(p.x * p.x + p.y * p.y);
+        if (!found || radius > maxRadius) {
+          maxRadius = radius;
+          found = true;
+        }
+      }
+      if (found) {
+        sum += maxRadius;
+        counted++;
+      }
     }
-    final boundingArea = (maxX - minX) * (maxY - minY);
-    if (boundingArea == 0) return 0;
-    return area / boundingArea;
+
+    return counted == 0 ? 0 : sum / counted;
+  }
+
+  /// 원점 기준 각도(0~360도).
+  static double _angleDegrees(Point p) {
+    final degrees = math.atan2(p.y, p.x) * 180 / math.pi;
+    return (degrees + 360) % 360;
+  }
+
+  /// 두 각도 사이의 최단 거리(0~180도).
+  static double _angularDistance(double a, double b) {
+    final diff = (a - b).abs() % 360;
+    return diff > 180 ? 360 - diff : diff;
   }
 
   // ---------------- 내부 정규화 파이프라인 ----------------

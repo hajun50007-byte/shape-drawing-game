@@ -58,8 +58,8 @@ class GameHud extends StatelessWidget {
   }
 }
 
-/// 마지막 인식의 extent/페널티/점수 내역을 보여주는 디버그 패널.
-/// 릴리즈 빌드에서는 렌더링되지 않으며, extent 페널티 곡선(0.08 / 0.30)을
+/// 마지막 인식의 반지름 비율/페널티/점수 내역을 보여주는 디버그 패널.
+/// 릴리즈 빌드에서는 렌더링되지 않으며, 비율 페널티 곡선(0.15 / 0.45)을
 /// 실제 값 변화를 보며 튜닝하기 위한 것이다.
 class DebugRecognitionPanel extends StatelessWidget {
   const DebugRecognitionPanel({
@@ -105,7 +105,7 @@ class DebugRecognitionPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '[DEBUG] extent ${r.candidateExtent.toStringAsFixed(3)}'
+            '[DEBUG] ratio ${r.candidateRatio.toStringAsFixed(3)}'
             ' · 통과기준 ${threshold.toStringAsFixed(1)}'
             '${_adjustmentLabel()}'
             ' · 판정 ${r.name} ${r.score.toStringAsFixed(1)}',
@@ -114,7 +114,8 @@ class DebugRecognitionPanel extends StatelessWidget {
           const SizedBox(height: 2),
           for (final e in r.evaluations)
             Text(
-              '${e.name.padRight(9)} Δ${e.extentDiff.toStringAsFixed(3)}'
+              '${e.name.padRight(9)} r${e.templateRatio.toStringAsFixed(2)}'
+              ' Δ${e.ratioDiff.toStringAsFixed(3)}'
               '  p${e.penalty.toStringAsFixed(2)}'
               '  ${e.baseScore.toStringAsFixed(1)} → ${e.finalScore.toStringAsFixed(1)}',
               style: _row,
