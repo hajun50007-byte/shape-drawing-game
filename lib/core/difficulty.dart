@@ -216,10 +216,14 @@ class RunConfig {
     this.multiLayerChance = 0,
     this.bossFromDifficulty,
     this.bossKind = BossKind.single,
+    this.isRaidMode = false,
     this.theme,
   });
 
-  bool get isRaid => duration == null;
+  /// 레이드 모드인지. duration이 null인 보스 스테이지(예: 쌍둥이 보스)와
+  /// 구분해야 하므로 시간 제한 유무가 아니라 명시적으로 지정한다.
+  /// 보스 낙하 속도·스폰 규칙·작은 도형 변형이 이 값에 따라 달라진다.
+  final bool isRaidMode;
 
   StageTheme get resolvedTheme =>
       theme ?? StageTheme.forDifficulty(minDifficulty);
@@ -306,11 +310,14 @@ class RunPresets {
     theme: StageTheme.accelerationLine,
   );
 
-  /// 보스가 처음 등장하는 난이도. 스테이지·레이드 공통.
+  /// 스테이지 모드에서 보스가 처음 등장하는 난이도.
   static const double bossDifficulty = 5;
 
-  /// 레이드 체크포인트 구간. UI 라벨은 "1단계/3단계/5단계"로 표시.
-  /// 보스 규칙은 스테이지와 동일하게 난이도 5부터 적용된다.
+  /// 레이드 모드에서 보스가 처음 등장하는 난이도.
+  /// 스테이지보다 늦게 열리고, 이후 주기적으로 반복 등장한다.
+  static const double raidBossDifficulty = 7;
+
+  /// 레이드 체크포인트 구간. UI 라벨은 "1단계/3단계/5단계/7단계"로 표시.
   static const raidCheckpoints = [
     RunConfig(
         id: 'raid_1',
@@ -318,24 +325,40 @@ class RunPresets {
         maxDifficulty: 3,
         duration: null,
         startLives: startLives,
-        bossFromDifficulty: bossDifficulty),
+        isRaidMode: true,
+        maxLayers: 2,
+        multiLayerChance: 0.2,
+        bossFromDifficulty: raidBossDifficulty),
     RunConfig(
         id: 'raid_3',
         minDifficulty: 3,
         maxDifficulty: 5,
         duration: null,
         startLives: startLives,
+        isRaidMode: true,
         maxLayers: 2,
         multiLayerChance: 0.3,
-        bossFromDifficulty: bossDifficulty),
+        bossFromDifficulty: raidBossDifficulty),
     RunConfig(
         id: 'raid_5',
         minDifficulty: 5,
         maxDifficulty: 7,
         duration: null,
         startLives: startLives,
+        isRaidMode: true,
         maxLayers: 2,
         multiLayerChance: 0.35,
-        bossFromDifficulty: bossDifficulty),
+        bossFromDifficulty: raidBossDifficulty),
+    RunConfig(
+        id: 'raid_7',
+        minDifficulty: 7,
+        maxDifficulty: 10,
+        duration: null,
+        startLives: startLives,
+        isRaidMode: true,
+        maxLayers: 2,
+        multiLayerChance: 0.4,
+        bossFromDifficulty: raidBossDifficulty,
+        theme: StageTheme.accelerationLine),
   ];
 }

@@ -80,6 +80,10 @@ class _GameScreenState extends State<GameScreen>
                               painter: FallingFieldPainter(
                                 shapes: _controller.shapes,
                                 background: theme.background,
+                                bursts: _controller.bursts,
+                                particles: _controller.particles,
+                                scorePopups: _controller.scorePopups,
+                                burstMaxScale: GameController.burstMaxScale,
                               ),
                             ),
                           ),

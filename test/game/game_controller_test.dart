@@ -332,6 +332,147 @@ void main() {
     });
   });
 
+  group('레이드 모드', () {
+    // 난이도 7에서 시작해 보스가 바로 등장하는 체크포인트.
+    RunConfig raid7() =>
+        RunPresets.raidCheckpoints.firstWhere((c) => c.id == 'raid_7');
+
+    test('난이도 7부터 보스가 등장한다', () {
+      final controller = _controllerFor(raid7());
+      controller.update(const Duration(milliseconds: 16));
+      expect(controller.shapes.any((s) => s.isBoss), isTrue);
+    });
+
+    test('난이도 7에 못 미치는 체크포인트에서는 보스가 안 나온다', () {
+      final raid1 =
+          RunPresets.raidCheckpoints.firstWhere((c) => c.id == 'raid_1');
+      final controller = _controllerFor(raid1);
+      for (int i = 0; i < 200; i++) {
+        controller.update(const Duration(milliseconds: 50));
+      }
+      expect(controller.shapes.any((s) => s.isBoss), isFalse);
+    });
+
+    test('레이드 보스가 스테이지 보스보다 빠르게 내려온다', () {
+      expect(GameController.raidBossFallSpeed,
+          greaterThan(GameController.bossFallSpeed));
+
+      final controller = _controllerFor(raid7());
+      controller.update(const Duration(milliseconds: 16));
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+      controller.update(GameController.bossIntroDuration);
+
+      final start = boss.y;
+      controller.update(const Duration(seconds: 1));
+      expect(boss.y - start, closeTo(GameController.raidBossFallSpeed, 2.0));
+    });
+
+    test('보스전 중에도 일반 스폰이 계속되며 2층 도형만 나온다', () {
+      final controller = _controllerFor(raid7());
+      controller.update(const Duration(milliseconds: 16));
+      expect(controller.shapes.any((s) => s.isBoss), isTrue);
+
+      for (int i = 0; i < 200; i++) {
+        controller.update(const Duration(milliseconds: 50));
+      }
+
+      final normals = controller.shapes.where((s) => !s.isBoss).toList();
+      expect(normals, isNotEmpty, reason: '레이드는 보스전 중에도 스폰이 계속된다');
+      for (final s in normals) {
+        expect(s.layers.length, 2, reason: '보스전 중에는 2층 도형만 스폰된다');
+      }
+    });
+
+    test('작은 변형 도형이 섞여 나온다', () {
+      final controller = _controllerFor(
+        RunPresets.raidCheckpoints.firstWhere((c) => c.id == 'raid_1'),
+      );
+      for (int i = 0; i < 400; i++) {
+        controller.update(const Duration(milliseconds: 50));
+      }
+
+      final sizes = controller.shapes.map((s) => s.size).toSet();
+      final smallSize =
+          GameController.shapeSize * GameController.smallShapeSizeFactor;
+      // 확률적이므로 두 크기 중 하나만 나올 수도 있지만, 나온 크기는
+      // 반드시 기본 크기이거나 축소 크기여야 한다.
+      for (final size in sizes) {
+        expect(
+          size == GameController.shapeSize || size == smallSize,
+          isTrue,
+          reason: 'unexpected size $size',
+        );
+      }
+      expect(GameController.smallShapeSizeFactor, 0.65);
+      expect(GameController.smallShapeChance, 0.30);
+    });
+
+    test('스테이지 모드에서는 작은 변형이 나오지 않는다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      for (int i = 0; i < 400; i++) {
+        controller.update(const Duration(milliseconds: 50));
+      }
+      for (final s in controller.shapes) {
+        expect(s.size, GameController.shapeSize);
+      }
+    });
+  });
+
+  group('클리어 이펙트', () {
+    test('콤보 클리어 시 파티클·버스트·점수 팝업이 생성된다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1),
+        _shape(['circle'], id: 2, y: 150),
+      ]);
+
+      _draw(controller, 'circle');
+
+      expect(controller.particles.length,
+          GameController.particlesPerShape * 2);
+      expect(controller.bursts.length, 1, reason: '버스트는 콤보 마지막 도형에만');
+      expect(controller.scorePopups.length, 1);
+      // 콤보면 합산 점수가 한 번에 표시된다.
+      expect(controller.scorePopups.single.score, controller.score);
+    });
+
+    test('레이어만 벗겨진 경우 파티클/버스트 없이 점수 팝업만 뜬다', () {
+      final controller = _controllerFor(RunPresets.specialStage);
+      controller.shapes.add(_shape(['triangle', 'circle']));
+
+      _draw(controller, 'circle');
+
+      expect(controller.shapes.single.isCleared, isFalse);
+      expect(controller.particles, isEmpty);
+      expect(controller.bursts, isEmpty);
+      expect(controller.scorePopups.length, 1);
+    });
+
+    test('이펙트는 수명이 끝나면 사라진다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.add(_shape(['circle']));
+      _draw(controller, 'circle');
+
+      expect(controller.particles, isNotEmpty);
+      controller.update(GameController.scorePopupDuration);
+
+      expect(controller.particles, isEmpty);
+      expect(controller.bursts, isEmpty);
+      expect(controller.scorePopups, isEmpty);
+    });
+
+    test('점수 팝업은 위로 떠오른다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.add(_shape(['circle'], y: 200));
+      _draw(controller, 'circle');
+
+      final popup = controller.scorePopups.single;
+      final startY = popup.y;
+      controller.update(const Duration(milliseconds: 300));
+      expect(popup.y, lessThan(startY));
+    });
+  });
+
   group('쌍둥이 보스', () {
     List<FallingShape> twinsOf(GameController c) =>
         c.shapes.where((s) => s.isBoss).toList();
@@ -483,12 +624,16 @@ void main() {
       expect(RunPresets.stage5.maxLayers, 2);
     });
 
-    test('보스는 난이도 5부터 등장하며 레이드에도 같은 규칙이 적용된다', () {
+    test('스테이지 보스는 난이도 5, 레이드 보스는 7부터 등장한다', () {
       expect(RunPresets.stage1.bossFromDifficulty, isNull);
       expect(RunPresets.stage5.bossFromDifficulty, 5);
       for (final raid in RunPresets.raidCheckpoints) {
-        expect(raid.bossFromDifficulty, 5);
+        expect(raid.bossFromDifficulty, RunPresets.raidBossDifficulty);
+        expect(raid.bossFromDifficulty, 7);
+        expect(raid.isRaidMode, isTrue);
       }
+      // 스테이지 프리셋은 레이드 모드가 아니다(쌍둥이 보스 스테이지 포함).
+      expect(RunPresets.stage10.isRaidMode, isFalse);
     });
   });
 }
