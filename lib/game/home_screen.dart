@@ -38,14 +38,14 @@ class HomeScreen extends StatelessWidget {
                   const _ModeButton(label: '1단계', config: RunPresets.stage1),
                   const _ModeButton(label: '2단계', config: RunPresets.stage2),
                   const _ModeButton(label: '3단계', config: RunPresets.stage3),
+                  const _ModeButton(label: '4단계 · 다층', config: RunPresets.stage4),
+                  const _ModeButton(
+                      label: '5단계 · 보스 등장', config: RunPresets.stage5),
                   const SizedBox(height: 24),
-                  const _SectionLabel('특별 스테이지 (다층 도형)'),
+                  const _SectionLabel('특별 스테이지'),
                   const _ModeButton(
-                      label: '특별 · 2층', config: RunPresets.specialStage),
-                  const _ModeButton(
-                      label: '보스 10단계 · 3층', config: RunPresets.boss10),
-                  const _ModeButton(
-                      label: '보스 20단계 · 4층', config: RunPresets.boss20),
+                      label: '다층 도형 집중 · 2층',
+                      config: RunPresets.specialStage),
                   const SizedBox(height: 24),
                   const _SectionLabel('레이드 모드'),
                   for (final config in RunPresets.raidCheckpoints)

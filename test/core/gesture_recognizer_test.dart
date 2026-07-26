@@ -57,7 +57,35 @@ void main() {
       expect(result.name, 'square');
     });
 
-    test('extent 게이트: 면적 비율이 어느 템플릿과도 다르면 unknown', () {
+    test('extent 페널티 곡선: 0.08 이하는 감점 없음, 0.30 이상은 0', () {
+      expect(UnistrokeRecognizer.extentPenalty(0), 1.0);
+      expect(UnistrokeRecognizer.extentPenalty(0.08), 1.0);
+      expect(UnistrokeRecognizer.extentPenalty(0.30), 0.0);
+      expect(UnistrokeRecognizer.extentPenalty(0.5), 0.0);
+      // 중간값은 선형 감소 — 0.19는 정확히 절반.
+      expect(UnistrokeRecognizer.extentPenalty(0.19), closeTo(0.5, 1e-9));
+    });
+
+    test('하드 컷이 아니라 소프트 페널티라 모든 템플릿이 채점된다', () {
+      final recognizer = UnistrokeRecognizer(ShapeTemplates.all);
+      final result = recognizer.recognize(ShapeTemplates.square.points);
+
+      // extent 차이가 커도 후보에서 빠지지 않고 내역이 남는다.
+      expect(result.evaluations.map((e) => e.name),
+          containsAll(['circle', 'triangle', 'square']));
+      expect(result.candidateExtent, greaterThan(0));
+
+      final square = result.evaluations.firstWhere((e) => e.name == 'square');
+      expect(square.penalty, 1.0);
+      expect(square.finalScore, closeTo(square.baseScore, 1e-9));
+
+      // 원은 extent 차이(≈0.21)로 감점돼 사각형보다 낮은 최종 점수가 된다.
+      final circle = result.evaluations.firstWhere((e) => e.name == 'circle');
+      expect(circle.penalty, lessThan(1.0));
+      expect(circle.finalScore, lessThan(square.finalScore));
+    });
+
+    test('extent 페널티: 면적 비율이 어느 템플릿과도 다르면 unknown', () {
       final recognizer = UnistrokeRecognizer(ShapeTemplates.all);
 
       // 거의 직선에 가까운 궤적은 면적이 0에 수렴해 어떤 템플릿의

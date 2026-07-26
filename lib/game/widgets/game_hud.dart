@@ -1,4 +1,7 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
+
+import '../../core/gesture_recognizer.dart';
 
 /// 상단 상태 표시줄. 난이도는 정수 레벨로만 보여준다(내부는 소수 보간 유지).
 class GameHud extends StatelessWidget {
@@ -55,28 +58,52 @@ class GameHud extends StatelessWidget {
   }
 }
 
-/// 인식 실패 시 유사도/통과 기준 점수를 잠깐 보여주는 디버그용 배지.
-class DebugScoreBadge extends StatelessWidget {
-  const DebugScoreBadge({
+/// 마지막 인식의 extent/페널티/점수 내역을 보여주는 디버그 패널.
+/// 릴리즈 빌드에서는 렌더링되지 않으며, extent 페널티 곡선(0.08 / 0.30)을
+/// 실제 값 변화를 보며 튜닝하기 위한 것이다.
+class DebugRecognitionPanel extends StatelessWidget {
+  const DebugRecognitionPanel({
     super.key,
-    required this.score,
+    required this.recognition,
     required this.threshold,
   });
 
-  final double score;
+  final RecognitionResult? recognition;
   final double threshold;
+
+  static const _label = TextStyle(color: Colors.orangeAccent, fontSize: 11);
+  static const _row = TextStyle(color: Colors.white70, fontSize: 11);
 
   @override
   Widget build(BuildContext context) {
+    if (!kDebugMode || recognition == null) return const SizedBox.shrink();
+    final r = recognition!;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.black54,
+        color: Colors.black.withValues(alpha: 0.72),
         borderRadius: BorderRadius.circular(6),
       ),
-      child: Text(
-        '[DEBUG] 유사도 ${score.toStringAsFixed(1)} / 필요 ${threshold.toStringAsFixed(1)}',
-        style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '[DEBUG] extent ${r.candidateExtent.toStringAsFixed(3)}'
+            ' · 통과기준 ${threshold.toStringAsFixed(1)}'
+            ' · 판정 ${r.name} ${r.score.toStringAsFixed(1)}',
+            style: _label,
+          ),
+          const SizedBox(height: 2),
+          for (final e in r.evaluations)
+            Text(
+              '${e.name.padRight(9)} Δ${e.extentDiff.toStringAsFixed(3)}'
+              '  p${e.penalty.toStringAsFixed(2)}'
+              '  ${e.baseScore.toStringAsFixed(1)} → ${e.finalScore.toStringAsFixed(1)}',
+              style: _row,
+            ),
+        ],
       ),
     );
   }

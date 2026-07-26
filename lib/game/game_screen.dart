@@ -127,18 +127,14 @@ class _GameScreenState extends State<GameScreen>
                       onHoldChanged: _controller.setSkillHeld,
                     ),
                   ),
-                  if (_controller.lastMissScore != null)
-                    Positioned(
-                      top: fieldHeight - 30,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: DebugScoreBadge(
-                          score: _controller.lastMissScore!,
-                          threshold: _controller.lastMissThreshold ?? 0,
-                        ),
-                      ),
+                  Positioned(
+                    left: 8,
+                    bottom: padHeight + 8,
+                    child: DebugRecognitionPanel(
+                      recognition: _controller.lastRecognition,
+                      threshold: _controller.currentThreshold,
                     ),
+                  ),
                   Positioned.fill(
                     child: DamageFlashOverlay(
                       intensity: _controller.damageFlash,

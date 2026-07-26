@@ -40,18 +40,34 @@ class GameController extends ChangeNotifier {
 
   static const double shapeSize = 72.0;
 
+  /// 보스 도형의 레이어 수. 일반 다층 도형(최대 2층)과 구분되는 기준.
+  static const int bossLayers = 10;
+
+  /// 보스 크기(낙하 구역의 짧은 변 대비 비율). 화면의 약 60%를 차지한다.
+  static const double bossSizeFraction = 0.6;
+
+  /// 보스 낙하 속도 배율. 일반 도형보다 훨씬 느리게 내려온다.
+  static const double bossFallSpeedFactor = 0.12;
+
+  /// 보스 등장 연출 길이.
+  static const Duration bossIntroDuration = Duration(milliseconds: 1200);
+
+  /// 보스를 처치한 뒤 다음 보스가 나오기까지의 간격.
+  static const Duration bossCooldown = Duration(seconds: 8);
+
   /// 레이어 하나를 깰 때마다 차는 콤보 게이지 양.
   static const double gaugeGainPerClear = 0.12;
 
   /// 스킬을 발동할 수 있는 최소 게이지.
   static const double skillMinGauge = 0.3;
 
-  /// 스킬을 홀드하지 않고 단발로 쓸 때의 명목 소모 속도(초당).
-  static const double skillBaseDrainPerSecond = 0.25;
+  /// 홀드 중 게이지 소모 속도(초당).
+  /// 플레이테스트에서 너무 빨리 닳는다는 피드백을 받아 기존 0.5에서
+  /// 절반으로 낮춘 값 — 계속 플레이하며 다시 조정할 튜닝 포인트다.
+  static const double skillHoldDrainPerSecond = 0.25;
 
-  /// 홀드 중 실제 소모 속도. 명목 소모의 2배라 "지금 쓸까 아낄까"가
-  /// 실제 판단이 된다. (Phase 2 기획 7-C절)
-  static const double skillHoldDrainPerSecond = skillBaseDrainPerSecond * 2;
+  /// 홀드 더블클리어에서 두 번째 클리어가 발동하기까지의 딜레이.
+  static const Duration doubleClearDelay = Duration(seconds: 1);
 
   /// 라이프 감소 시 붉은 테두리 플래시가 사라지는 속도(초당).
   static const double damageFlashDecayPerSecond = 2.5;
@@ -78,6 +94,14 @@ class GameController extends ChangeNotifier {
   StrokeFeedback? get strokeFeedback => _strokeFeedback;
   double? get lastMissScore => _lastMissScore;
   double? get lastMissThreshold => _lastMissThreshold;
+
+  /// 마지막으로 인식한 결과. extent 페널티 곡선을 튜닝하기 위한 디버그
+  /// 오버레이에서 읽는다(릴리즈 빌드에서는 표시되지 않는다).
+  core.RecognitionResult? get lastRecognition => _lastRecognition;
+
+  /// 마지막 인식에 적용된 통과 기준 점수.
+  double get currentThreshold =>
+      DifficultyTable.paramsFor(_difficultyLevel).recognitionThreshold;
 
   /// 0~1. 라이프가 깎인 직후 1이 되고 시간에 따라 줄어든다.
   double get damageFlash => _damageFlash;
@@ -109,9 +133,16 @@ class GameController extends ChangeNotifier {
   StrokeFeedback? _strokeFeedback;
   double? _lastMissScore;
   double? _lastMissThreshold;
+  core.RecognitionResult? _lastRecognition;
   double _damageFlash = 0;
   double _comboGauge = 0;
   bool _skillHeld = false;
+
+  /// 홀드 더블클리어의 두 번째 클리어 예약.
+  Duration _doubleClearRemaining = Duration.zero;
+  int _doubleClearScore = 0;
+
+  Duration _bossCooldownRemaining = Duration.zero;
 
   Size _fieldSize = Size.zero;
 
@@ -131,8 +162,10 @@ class GameController extends ChangeNotifier {
 
     _tickTransientFeedback(dt, dtSeconds);
     _tickSkill(dtSeconds);
+    _tickDoubleClear(dt);
     _tickShapes(dt, dtSeconds, params);
     _trySpawn(params);
+    _trySpawnBoss(dt);
 
     if (_applyMissedShapes()) {
       notifyListeners();
@@ -177,8 +210,33 @@ class GameController extends ChangeNotifier {
     if (_comboGauge == 0) _skillHeld = false;
   }
 
+  /// 예약된 두 번째 클리어를 딜레이 후에 발동한다.
+  void _tickDoubleClear(Duration dt) {
+    if (_doubleClearRemaining <= Duration.zero) return;
+    _doubleClearRemaining -= dt;
+    if (_doubleClearRemaining > Duration.zero) return;
+
+    _doubleClearRemaining = Duration.zero;
+    final target = _mostUrgentActionable();
+    if (target == null) return;
+
+    final cleared = _clearMatching(target.activeName);
+    if (cleared == 0) return;
+    _score += _doubleClearScore * cleared;
+    _comboGauge = math.min(1.0, _comboGauge + gaugeGainPerClear * cleared);
+    HapticFeedback.lightImpact();
+    SystemSound.play(SystemSoundType.click);
+  }
+
   void _tickShapes(Duration dt, double dtSeconds, DifficultyParams params) {
     for (final shape in shapes) {
+      if (shape.isIntroPlaying) {
+        shape.introRemaining -= dt;
+        if (shape.introRemaining < Duration.zero) {
+          shape.introRemaining = Duration.zero;
+        }
+        continue;
+      }
       if (shape.isFlashing) {
         shape.flashRemaining -= dt;
         if (shape.flashRemaining < Duration.zero) {
@@ -187,17 +245,54 @@ class GameController extends ChangeNotifier {
         continue;
       }
       if (shape.isCleared) continue;
-      shape.y += params.fallSpeed * dtSeconds;
+      final speed = shape.isBoss
+          ? params.fallSpeed * bossFallSpeedFactor
+          : params.fallSpeed;
+      shape.y += speed * dtSeconds;
     }
     shapes.removeWhere((s) => s.isFinished);
   }
 
   void _trySpawn(DifficultyParams params) {
-    final aliveCount = shapes.where((s) => !s.isCleared).length;
+    // 보스는 별도 규칙으로 관리하므로 일반 도형 정원에서 제외한다.
+    final aliveCount =
+        shapes.where((s) => !s.isBoss && !s.isCleared).length;
     if (_sinceLastSpawn.inMilliseconds < params.spawnIntervalMs) return;
     if (aliveCount >= params.maxSimultaneousShapes) return;
     _sinceLastSpawn = Duration.zero;
     shapes.add(_createShape());
+  }
+
+  /// 보스는 지정 난이도 이상에서, 화면에 하나도 없을 때만 등장한다.
+  void _trySpawnBoss(Duration dt) {
+    final bossFrom = runConfig.bossFromDifficulty;
+    if (bossFrom == null || _difficultyLevel < bossFrom) return;
+
+    if (shapes.any((s) => s.isBoss)) {
+      _bossCooldownRemaining = bossCooldown;
+      return;
+    }
+    if (_bossCooldownRemaining > Duration.zero) {
+      _bossCooldownRemaining -= dt;
+      return;
+    }
+    shapes.add(_createBoss());
+  }
+
+  FallingShape _createBoss() {
+    final size =
+        math.min(_fieldSize.width, _fieldSize.height) * bossSizeFraction;
+    return FallingShape(
+      id: _nextShapeId++,
+      layers: _buildLayerNames(bossLayers),
+      // 화면 정중앙에서 내려온다.
+      x: _fieldSize.width / 2,
+      y: -size / 2,
+      size: size,
+      color: ShapePalette.multiLayerColor,
+      isBoss: true,
+      introDuration: bossIntroDuration,
+    );
   }
 
   FallingShape _createShape() {
@@ -300,18 +395,17 @@ class GameController extends ChangeNotifier {
     }
 
     final result = _recognizer.recognize(strokePoints);
+    _lastRecognition = result;
     final params = DifficultyTable.paramsFor(_difficultyLevel);
     final passed = result.score >= params.recognitionThreshold;
 
-    var clearedCount = passed ? _clearMatching(result.name) : 0;
+    final clearedCount = passed ? _clearMatching(result.name) : 0;
 
-    // 홀드 더블클리어: 스킬을 누르고 있으면 한 번의 성공으로 두 그룹을 지운다.
-    // 방금 지운 도형은 플래시 중이라 제외되므로 다음 그룹이 대상이 된다.
+    // 홀드 더블클리어: 스킬을 누르고 있으면 한 번의 성공이 잠시 뒤 두 번째
+    // 클리어로 이어진다. 즉시가 아니라 딜레이를 둬서 연출이 겹치지 않게 한다.
     if (clearedCount > 0 && isSkillActive) {
-      final next = _mostUrgentActionable();
-      if (next != null) {
-        clearedCount += _clearMatching(next.activeName);
-      }
+      _doubleClearRemaining = doubleClearDelay;
+      _doubleClearScore = result.score.round();
     }
 
     if (clearedCount > 0) {
@@ -381,6 +475,10 @@ class GameController extends ChangeNotifier {
     _damageFlash = 0;
     _comboGauge = 0;
     _skillHeld = false;
+    _lastRecognition = null;
+    _doubleClearRemaining = Duration.zero;
+    _doubleClearScore = 0;
+    _bossCooldownRemaining = Duration.zero;
     notifyListeners();
   }
 }

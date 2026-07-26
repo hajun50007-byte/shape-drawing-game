@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:shape_drawing_game/core/difficulty.dart';
 import 'package:shape_drawing_game/core/shape_templates.dart';
+import 'package:shape_drawing_game/core/stage_theme.dart';
 import 'package:shape_drawing_game/game/model/falling_shape.dart';
 import 'package:shape_drawing_game/game/state/game_controller.dart';
 
@@ -75,21 +76,42 @@ void main() {
   });
 
   group('다층 도형', () {
-    test('안쪽 레이어부터 순서대로 벗겨진다', () {
+    test('바깥 레이어부터 순서대로 벗겨진다', () {
       final controller = _controllerFor(RunPresets.specialStage);
       // index 0 = 안쪽(triangle), index 1 = 바깥(circle)
       controller.shapes.add(_shape(['triangle', 'circle']));
       final shape = controller.shapes.single;
+      expect(shape.activeName, 'circle');
 
-      // 바깥 레이어(circle)를 먼저 그려도 아무 일도 일어나지 않는다.
-      _draw(controller, 'circle');
+      // 안쪽 레이어(triangle)를 먼저 그려도 아무 일도 일어나지 않는다.
+      _draw(controller, 'triangle');
       expect(shape.clearedLayers, 0);
 
-      // 안쪽 레이어(triangle)를 그리면 한 겹 벗겨진다.
-      _draw(controller, 'triangle');
+      // 바깥 레이어(circle)를 그리면 한 겹 벗겨진다.
+      _draw(controller, 'circle');
       expect(shape.clearedLayers, 1);
-      expect(shape.activeName, 'circle');
+      expect(shape.activeName, 'triangle');
       expect(shape.isCleared, isFalse);
+    });
+
+    test('활성 레이어도 일반 도형과 함께 한 번에 클리어된다', () {
+      final controller = _controllerFor(RunPresets.specialStage);
+      // 다층 도형의 바깥 레이어가 삼각형이고, 일반 삼각형도 떠 있다.
+      controller.shapes.addAll([
+        _shape(['circle', 'triangle'], id: 1),
+        _shape(['triangle'], id: 2, y: 150),
+      ]);
+
+      _draw(controller, 'triangle');
+
+      final multi = controller.shapes.firstWhere((s) => s.id == 1);
+      final plain = controller.shapes.firstWhere((s) => s.id == 2);
+      expect(multi.clearedLayers, 1, reason: '다층 도형의 바깥 레이어가 벗겨져야 한다');
+      expect(plain.isCleared, isTrue, reason: '일반 삼각형도 같이 제거되어야 한다');
+      // 두 개를 클리어했으니 점수도 2개분을 받는다.
+      expect(controller.score, greaterThan(0));
+      expect(controller.comboGauge,
+          closeTo(GameController.gaugeGainPerClear * 2, 1e-9));
     });
 
     test('모든 레이어를 벗기면 플래시가 끝난 뒤 제거된다', () {
@@ -138,9 +160,16 @@ void main() {
       expect(controller.isSkillActive, isTrue);
 
       _draw(controller, 'circle');
+      final square = controller.shapes.firstWhere((s) => s.id == 5);
+      expect(square.isCleared, isFalse, reason: '두 번째 클리어는 딜레이 후에 발동한다');
 
-      // 그린 원뿐 아니라, 가장 아래에 있던 사각형까지 함께 클리어된다.
-      expect(controller.shapes.every((s) => s.isCleared), isTrue);
+      // 딜레이(1초)가 지나면 남아 있던 사각형까지 클리어된다.
+      controller.update(GameController.doubleClearDelay);
+      expect(square.isCleared, isTrue);
+    });
+
+    test('두 번째 클리어는 1초 딜레이 뒤에 발동한다', () {
+      expect(GameController.doubleClearDelay, const Duration(seconds: 1));
     });
 
     test('홀드 중에는 게이지가 소모된다', () {
@@ -157,6 +186,56 @@ void main() {
       controller.update(const Duration(milliseconds: 500));
 
       expect(controller.comboGauge, lessThan(before));
+    });
+  });
+
+  group('보스', () {
+    test('난이도 5 스테이지에서 등장하며 크고 중앙에서 내려온다', () {
+      final controller = _controllerFor(RunPresets.stage5);
+      controller.update(const Duration(milliseconds: 16));
+
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+      expect(boss.layers.length, GameController.bossLayers);
+      expect(boss.layers.length, 10);
+      // 낙하 구역(400x500)의 짧은 변 기준 60%.
+      expect(boss.size, closeTo(400 * GameController.bossSizeFraction, 1e-9));
+      expect(boss.x, closeTo(200, 1e-9));
+    });
+
+    test('등장 연출 중에는 판정 대상이 아니고 낙하하지 않는다', () {
+      final controller = _controllerFor(RunPresets.stage5);
+      controller.update(const Duration(milliseconds: 16));
+
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+      expect(boss.isIntroPlaying, isTrue);
+      expect(boss.isActionable, isFalse);
+
+      final yDuringIntro = boss.y;
+      controller.update(const Duration(milliseconds: 200));
+      expect(boss.y, yDuringIntro, reason: '연출 중에는 내려오지 않는다');
+
+      // 연출이 끝나면 판정 대상이 되고 아주 느리게 내려온다.
+      controller.update(GameController.bossIntroDuration);
+      expect(boss.isIntroPlaying, isFalse);
+      expect(boss.isActionable, isTrue);
+      controller.update(const Duration(milliseconds: 500));
+      expect(boss.y, greaterThan(yDuringIntro));
+    });
+
+    test('화면에 한 번에 하나만 존재한다', () {
+      final controller = _controllerFor(RunPresets.stage5);
+      for (int i = 0; i < 200; i++) {
+        controller.update(const Duration(milliseconds: 50));
+      }
+      expect(controller.shapes.where((s) => s.isBoss).length, lessThanOrEqualTo(1));
+    });
+
+    test('보스가 없는 스테이지에서는 등장하지 않는다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      for (int i = 0; i < 200; i++) {
+        controller.update(const Duration(milliseconds: 50));
+      }
+      expect(controller.shapes.any((s) => s.isBoss), isFalse);
     });
   });
 
@@ -178,15 +257,25 @@ void main() {
     });
 
     test('스테이지 구간별 테마가 지정된다', () {
+      // 1~5단계는 "공장 초입", 6단계부터 "가속 라인".
       expect(RunPresets.stage1.resolvedTheme.name, '공장 초입');
-      expect(RunPresets.boss10.resolvedTheme.name, '가속 라인');
+      expect(RunPresets.stage5.resolvedTheme.name, '공장 초입');
+      expect(StageTheme.forDifficulty(5).name, '공장 초입');
+      expect(StageTheme.forDifficulty(6).name, '가속 라인');
     });
 
-    test('다층 스테이지만 레이어 수가 1보다 크다', () {
+    test('일반 다층 도형은 최대 2층까지만 쓴다', () {
       expect(RunPresets.stage1.maxLayers, 1);
       expect(RunPresets.specialStage.maxLayers, 2);
-      expect(RunPresets.boss10.maxLayers, 3);
-      expect(RunPresets.boss20.maxLayers, 4);
+      expect(RunPresets.stage5.maxLayers, 2);
+    });
+
+    test('보스는 난이도 5부터 등장하며 레이드에도 같은 규칙이 적용된다', () {
+      expect(RunPresets.stage1.bossFromDifficulty, isNull);
+      expect(RunPresets.stage5.bossFromDifficulty, 5);
+      for (final raid in RunPresets.raidCheckpoints) {
+        expect(raid.bossFromDifficulty, 5);
+      }
     });
   });
 }

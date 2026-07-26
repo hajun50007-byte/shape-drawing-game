@@ -21,18 +21,26 @@ class FallingFieldPainter extends CustomPainter {
       final layerCount = shape.layers.length;
       final baseColor = ShapePalette.ensureContrast(shape.color, background);
 
-      // 바깥(index 큰 쪽) -> 안쪽(index 작은 쪽) 순서로 그려야 안쪽이 위에 보인다.
-      for (int i = layerCount - 1; i >= shape.clearedLayers; i--) {
-        final scale = layerScale(i, layerCount);
+      // 등장 연출: 작게 시작해 제자리 크기까지 커지며 서서히 진해진다.
+      final intro = shape.introProgress;
+      final introScale = 0.3 + 0.7 * intro;
+      final introAlpha = (0.25 + 0.75 * intro).clamp(0.0, 1.0);
+
+      // 클리어는 바깥부터 진행되므로 남아 있는 가장 바깥 레이어부터 그리고,
+      // 안쪽(index 작은 쪽)을 나중에 그려야 위에 보인다.
+      for (int i = shape.outermostRemainingIndex; i >= 0; i--) {
+        final scale = layerScale(i, layerCount) * introScale;
         final path = buildShapePath(
           shape.layers[i],
           shape.x,
           shape.y,
           shape.size * scale,
         );
-        paint.color = shape.isFlashing
+        final color = shape.isFlashing
             ? Colors.white
             : ShapePalette.layerShade(baseColor, i, layerCount);
+        paint.color =
+            introAlpha >= 1 ? color : color.withValues(alpha: introAlpha);
         canvas.drawPath(path, paint);
       }
     }

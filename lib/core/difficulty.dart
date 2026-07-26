@@ -86,12 +86,17 @@ class RunConfig {
   final Duration? duration; // null = 레이드
   final int startLives;
 
-  /// 다층 도형이 나올 때의 레이어 수. 1이면 다층 도형이 없는 일반 스테이지,
-  /// 특별 스테이지는 2, 보스(10/20단계)는 3~4를 쓴다.
+  /// 일반 다층 도형의 레이어 수. 1이면 다층 도형이 없는 스테이지이고,
+  /// 다층 도형이 있는 스테이지는 최대 2층까지만 쓴다. 10층짜리 보스는
+  /// 이 값과 무관하게 [bossFromDifficulty]로 제어한다.
   final int maxLayers;
 
   /// 도형이 스폰될 때 다층 도형으로 나올 확률(0~1).
   final double multiLayerChance;
+
+  /// 이 난이도 이상이 되면 보스가 등장한다. null이면 보스 없음.
+  /// 스테이지·레이드 모두 같은 규칙으로 동작한다.
+  final double? bossFromDifficulty;
 
   /// 구간 테마. null이면 minDifficulty로부터 자동 선택한다.
   final StageTheme? theme;
@@ -104,6 +109,7 @@ class RunConfig {
     required this.startLives,
     this.maxLayers = 1,
     this.multiLayerChance = 0,
+    this.bossFromDifficulty,
     this.theme,
   });
 
@@ -147,7 +153,30 @@ class RunPresets {
     startLives: startLives,
   );
 
-  /// 다층 도형이 등장하는 특별 스테이지(2층).
+  /// 다층 도형이 등장하는 4단계.
+  static const stage4 = RunConfig(
+    id: 'stage_4',
+    minDifficulty: 4,
+    maxDifficulty: 6,
+    duration: stageDuration,
+    startLives: startLives,
+    maxLayers: 2,
+    multiLayerChance: 0.35,
+  );
+
+  /// 보스가 처음 등장하는 5단계.
+  static const stage5 = RunConfig(
+    id: 'stage_5',
+    minDifficulty: 5,
+    maxDifficulty: 7,
+    duration: stageDuration,
+    startLives: startLives,
+    maxLayers: 2,
+    multiLayerChance: 0.35,
+    bossFromDifficulty: bossDifficulty,
+  );
+
+  /// 다층 도형만 나오는 특별 스테이지(2층, 보스 없음).
   static const specialStage = RunConfig(
     id: 'stage_special',
     minDifficulty: 3,
@@ -155,51 +184,39 @@ class RunPresets {
     duration: stageDuration,
     startLives: startLives,
     maxLayers: 2,
-    multiLayerChance: 0.35,
-  );
-
-  /// 보스 스테이지. 10단계는 3층, 20단계는 4층까지 쌓인다.
-  static const boss10 = RunConfig(
-    id: 'boss_10',
-    minDifficulty: 5,
-    maxDifficulty: 7,
-    duration: stageDuration,
-    startLives: startLives,
-    maxLayers: 3,
-    multiLayerChance: 0.5,
-    theme: StageTheme.accelerationLine,
-  );
-
-  static const boss20 = RunConfig(
-    id: 'boss_20',
-    minDifficulty: 6,
-    maxDifficulty: 7,
-    duration: stageDuration,
-    startLives: startLives,
-    maxLayers: 4,
     multiLayerChance: 0.6,
-    theme: StageTheme.accelerationLine,
   );
+
+  /// 보스가 처음 등장하는 난이도. 스테이지·레이드 공통.
+  static const double bossDifficulty = 5;
 
   /// 레이드 체크포인트 구간. UI 라벨은 "1단계/3단계/5단계"로 표시.
+  /// 보스 규칙은 스테이지와 동일하게 난이도 5부터 적용된다.
   static const raidCheckpoints = [
     RunConfig(
         id: 'raid_1',
         minDifficulty: 1,
         maxDifficulty: 3,
         duration: null,
-        startLives: startLives),
+        startLives: startLives,
+        bossFromDifficulty: bossDifficulty),
     RunConfig(
         id: 'raid_3',
         minDifficulty: 3,
         maxDifficulty: 5,
         duration: null,
-        startLives: startLives),
+        startLives: startLives,
+        maxLayers: 2,
+        multiLayerChance: 0.3,
+        bossFromDifficulty: bossDifficulty),
     RunConfig(
         id: 'raid_5',
         minDifficulty: 5,
         maxDifficulty: 7,
         duration: null,
-        startLives: startLives),
+        startLives: startLives,
+        maxLayers: 2,
+        multiLayerChance: 0.35,
+        bossFromDifficulty: bossDifficulty),
   ];
 }

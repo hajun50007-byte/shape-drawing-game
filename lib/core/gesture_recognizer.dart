@@ -20,10 +20,48 @@ class ShapeTemplate {
   const ShapeTemplate(this.name, this.points);
 }
 
+/// 템플릿 하나에 대한 채점 내역. 디버그 오버레이에서 extent 페널티 곡선을
+/// 튜닝할 때 쓰인다.
+class TemplateEvaluation {
+  final String name;
+
+  /// 후보와 이 템플릿의 extent 차이.
+  final double extentDiff;
+
+  /// extentDiff로부터 계산된 0~1 배율.
+  final double penalty;
+
+  /// 궤적 거리만으로 계산한 0~100 점수.
+  final double baseScore;
+
+  /// baseScore * penalty.
+  final double finalScore;
+
+  const TemplateEvaluation({
+    required this.name,
+    required this.extentDiff,
+    required this.penalty,
+    required this.baseScore,
+    required this.finalScore,
+  });
+}
+
 class RecognitionResult {
   final String name;
   final double score; // 0~100, 높을수록 유사
-  const RecognitionResult(this.name, this.score);
+
+  /// 후보 궤적의 extent(면적 ÷ 바운딩박스 면적).
+  final double candidateExtent;
+
+  /// 템플릿별 채점 내역(디버그용).
+  final List<TemplateEvaluation> evaluations;
+
+  const RecognitionResult(
+    this.name,
+    this.score, {
+    this.candidateExtent = 0,
+    this.evaluations = const [],
+  });
 }
 
 class UnistrokeRecognizer {
@@ -32,10 +70,26 @@ class UnistrokeRecognizer {
   static final double _halfDiagonal =
       0.5 * math.sqrt(_squareSize * _squareSize * 2);
 
-  /// extent(면적 ÷ 바운딩박스 면적) 차이가 이 값을 넘는 템플릿은 후보에서
-  /// 제외한다. 원≈0.785 / 사각형≈1.0 / 삼각형≈0.5로 서로 0.2 이상 떨어져
-  /// 있어, 이 게이트만으로 사각형이 원으로 오인식되는 문제가 걸러진다.
-  static const double _extentTolerance = 0.12;
+  /// extent(면적 ÷ 바운딩박스 면적) 차이가 이 값 이하면 감점 없음.
+  /// 원≈0.785 / 사각형≈1.0 / 삼각형≈0.5로 서로 0.2 이상 떨어져 있어,
+  /// 이 페널티만으로 사각형이 원으로 오인식되는 문제가 걸러진다.
+  ///
+  /// 하드 컷이 아니라 소프트 페널티라, 애매하게 그린 도형도 점수만 깎이고
+  /// 후보로는 남는다. 두 상수는 디버그 오버레이를 보며 튜닝하는 값이다.
+  static const double extentPenaltyStart = 0.08;
+
+  /// 이 차이 이상이면 페널티가 0(사실상 후보에서 탈락).
+  static const double extentPenaltyEnd = 0.30;
+
+  /// extent 차이에 따른 0~1 배율. start 이하면 1, end 이상이면 0,
+  /// 그 사이는 선형으로 감소한다.
+  static double extentPenalty(double extentDiff) {
+    if (extentDiff <= extentPenaltyStart) return 1.0;
+    if (extentDiff >= extentPenaltyEnd) return 0.0;
+    return 1.0 -
+        (extentDiff - extentPenaltyStart) /
+            (extentPenaltyEnd - extentPenaltyStart);
+  }
 
   final List<ShapeTemplate> _normalizedTemplates;
 
@@ -65,33 +119,53 @@ class UnistrokeRecognizer {
     final candidate = _normalize(rawPoints);
     final candidateExtent = _extentOf(candidate);
 
+    final evaluations = <TemplateEvaluation>[];
     String bestName = 'unknown';
-    double bestDistance = double.infinity;
+    double bestScore = 0;
 
     for (int i = 0; i < _normalizedTemplates.length; i++) {
-      // extent 게이트: 면적 비율이 크게 다른 템플릿은 아예 비교하지 않는다.
-      if ((candidateExtent - _templateExtents[i]).abs() > _extentTolerance) {
-        continue;
-      }
       final t = _normalizedTemplates[i];
       final forwardDistance = _bestCyclicDistance(candidate, t.points);
       final reversedDistance =
           _bestCyclicDistance(candidate, _reversedTemplatePoints[i]);
-      final d = math.min(forwardDistance, reversedDistance);
-      if (d < bestDistance) {
-        bestDistance = d;
+      final distance = math.min(forwardDistance, reversedDistance);
+
+      final baseScore =
+          math.max(0.0, (1 - distance / _halfDiagonal) * 100).toDouble();
+      final extentDiff = (candidateExtent - _templateExtents[i]).abs();
+      final penalty = extentPenalty(extentDiff);
+      final finalScore = baseScore * penalty;
+
+      evaluations.add(TemplateEvaluation(
+        name: t.name,
+        extentDiff: extentDiff,
+        penalty: penalty,
+        baseScore: baseScore,
+        finalScore: finalScore,
+      ));
+
+      if (finalScore > bestScore) {
+        bestScore = finalScore;
         bestName = t.name;
       }
     }
 
-    // 게이트를 통과한 템플릿이 하나도 없으면 어떤 도형도 아니라고 본다.
-    if (bestDistance == double.infinity) {
-      return const RecognitionResult('unknown', 0);
+    // 페널티까지 먹고도 0점이면 어떤 도형도 아니라고 본다.
+    if (bestScore <= 0) {
+      return RecognitionResult(
+        'unknown',
+        0,
+        candidateExtent: candidateExtent,
+        evaluations: evaluations,
+      );
     }
 
-    final score =
-        math.max(0.0, (1 - bestDistance / _halfDiagonal) * 100).toDouble();
-    return RecognitionResult(bestName, score);
+    return RecognitionResult(
+      bestName,
+      bestScore,
+      candidateExtent: candidateExtent,
+      evaluations: evaluations,
+    );
   }
 
   /// 신발끈 공식으로 구한 도형 면적 ÷ 바운딩박스 면적.

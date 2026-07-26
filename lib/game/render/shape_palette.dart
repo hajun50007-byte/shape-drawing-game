@@ -55,13 +55,18 @@ class ShapePalette {
     return flipped.withLightness(pushedLightness).toColor();
   }
 
-  /// 다층 도형에서 레이어별 색. 안쪽으로 갈수록 밝게 해서 중첩이 보이게 한다.
+  /// 안쪽 레이어일수록 어두워지는 최대 명도 감소폭.
+  static const double _innerLayerDarkening = 0.30;
+
+  /// 다층 도형에서 레이어별 색. 색상(보라)은 유지한 채 안쪽으로 갈수록
+  /// 명도만 낮춰서 중첩이 보이게 한다.
   static Color layerShade(Color base, int layerIndex, int layerCount) {
     if (layerCount <= 1) return base;
     final hsl = HSLColor.fromColor(base);
-    // index 0(가장 안쪽)이 가장 밝다.
+    // t = 0이 가장 안쪽, 1이 가장 바깥. 안쪽일수록 어둡다.
     final t = layerIndex / (layerCount - 1);
-    final lightness = (hsl.lightness + 0.22 * (1 - t)).clamp(0.0, 1.0);
+    final lightness =
+        (hsl.lightness - _innerLayerDarkening * (1 - t)).clamp(0.05, 1.0);
     return hsl.withLightness(lightness).toColor();
   }
 }
