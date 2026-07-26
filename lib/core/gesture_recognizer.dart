@@ -34,10 +34,18 @@ class UnistrokeRecognizer {
 
   final List<ShapeTemplate> _normalizedTemplates;
 
+  // 각 정규화 템플릿의 점 순서를 뒤집은 버전. 사용자가 도형을 시계/반시계
+  // 어느 방향으로 그리든 인식되도록, recognize()에서 정방향/역방향 둘 다와
+  // 비교해 더 가까운 쪽을 사용한다. _normalizedTemplates와 인덱스가 대응한다.
+  late final List<List<Point>> _reversedTemplatePoints;
+
   UnistrokeRecognizer(List<ShapeTemplate> rawTemplates)
       : _normalizedTemplates = rawTemplates
             .map((t) => ShapeTemplate(t.name, _normalize(t.points)))
-            .toList();
+            .toList() {
+    _reversedTemplatePoints =
+        _normalizedTemplates.map((t) => t.points.reversed.toList()).toList();
+  }
 
   /// 손가락 궤적(raw)을 등록된 템플릿과 비교
   RecognitionResult recognize(List<Point> rawPoints) {
@@ -49,8 +57,12 @@ class UnistrokeRecognizer {
     String bestName = 'unknown';
     double bestDistance = double.infinity;
 
-    for (final t in _normalizedTemplates) {
-      final d = _pathDistance(candidate, t.points);
+    for (int i = 0; i < _normalizedTemplates.length; i++) {
+      final t = _normalizedTemplates[i];
+      final forwardDistance = _pathDistance(candidate, t.points);
+      final reversedDistance =
+          _pathDistance(candidate, _reversedTemplatePoints[i]);
+      final d = math.min(forwardDistance, reversedDistance);
       if (d < bestDistance) {
         bestDistance = d;
         bestName = t.name;
@@ -65,11 +77,9 @@ class UnistrokeRecognizer {
   // ---------------- 내부 정규화 파이프라인 ----------------
 
   static List<Point> _normalize(List<Point> points) {
-    // 회전 정규화(indicative angle 계산 + rotateBy)는 의도적으로 생략한다.
-    // 이 게임의 도형은 항상 정방향으로만 제시되므로 회전 보정이 오히려
-    // 유사한 도형(예: 사각형 vs 마름모로 치우친 입력)을 오인식시키는
-    // 불안정성의 원인이었다.
     var pts = _resample(points, _numResamplePoints);
+    final angle = _indicativeAngle(pts);
+    pts = _rotateBy(pts, -angle);
     pts = _scaleToSquare(pts, _squareSize);
     pts = _translateToOrigin(pts);
     return pts;
@@ -135,6 +145,33 @@ class UnistrokeRecognizer {
       sy += p.y;
     }
     return Point(sx / points.length, sy / points.length);
+  }
+
+  static double _indicativeAngle(List<Point> points) {
+    final c = _centroid(points);
+    // Flutter 좌표계는 y가 아래로 증가하므로, 실제 기기 테스트하며
+    // 부호가 반대로 느껴지면 이 함수의 부호를 뒤집어 조정할 것.
+    //
+    // 이 회전 보정은 사용자가 도형 테두리의 어느 지점부터 그리기 시작하든
+    // (예: 원을 위에서부터 vs 옆에서부터) 리샘플된 점 배열이 템플릿과 같은
+    // 방향으로 정렬되게 해준다. 우리 템플릿(원/삼각형/사각형/별)은 모두
+    // 충분히 대칭적이라 시작점이 달라도 사실상 점 집합 전체가 회전한 것과
+    // 동일하므로, 이 정규화 없이는 시작점에 따라 점수가 크게 흔들린다.
+    return math.atan2(c.y - points.first.y, points.first.x - c.x);
+  }
+
+  static List<Point> _rotateBy(List<Point> points, double angle) {
+    final c = _centroid(points);
+    final cosA = math.cos(angle);
+    final sinA = math.sin(angle);
+    return points.map((p) {
+      final dx = p.x - c.x;
+      final dy = p.y - c.y;
+      return Point(
+        dx * cosA - dy * sinA + c.x,
+        dx * sinA + dy * cosA + c.y,
+      );
+    }).toList();
   }
 
   static List<Point> _scaleToSquare(List<Point> points, double size) {
