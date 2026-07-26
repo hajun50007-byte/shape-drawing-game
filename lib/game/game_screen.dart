@@ -179,14 +179,17 @@ class _GameScreenState extends State<GameScreen>
     final result = _recognizer.recognize(_strokePoints);
     final params = DifficultyTable.paramsFor(_difficultyLevel);
 
-    final FallingShape? target = result.score >= params.recognitionThreshold
-        ? _mostUrgentMatch(result.name)
-        : null;
+    // 같은 이름의 낙하 도형이 여러 개 떠 있으면 전부 동시에 제거 대상이 된다.
+    final List<FallingShape> targets = result.score >= params.recognitionThreshold
+        ? _allMatches(result.name)
+        : const [];
 
     setState(() {
-      if (target != null) {
-        target.destroying = true;
-        _score += result.score.round();
+      if (targets.isNotEmpty) {
+        for (final shape in targets) {
+          shape.destroying = true;
+        }
+        _score += result.score.round() * targets.length;
         _strokeFeedback = StrokeFeedback.hit;
         _lastMissScore = null;
       } else {
@@ -196,12 +199,12 @@ class _GameScreenState extends State<GameScreen>
       }
     });
 
-    if (target != null) {
+    if (targets.isNotEmpty) {
       HapticFeedback.lightImpact();
       SystemSound.play(SystemSoundType.click);
       Timer(const Duration(milliseconds: 150), () {
         if (!mounted) return;
-        setState(() => _shapes.remove(target));
+        setState(() => _shapes.removeWhere(targets.contains));
       });
     } else {
       _missScoreClearTimer?.cancel();
@@ -221,18 +224,11 @@ class _GameScreenState extends State<GameScreen>
     });
   }
 
-  /// 같은 이름의 낙하 도형이 여럿이면, 화면 아래(놓치기 직전)에 가장 가까운
-  /// 것을 우선 제거한다. 드로잉 패드와 낙하 구역의 좌표계가 분리되어 있어
-  /// 그린 위치와 도형 위치를 직접 비교할 수 없기 때문.
-  FallingShape? _mostUrgentMatch(String name) {
-    FallingShape? best;
-    for (final shape in _shapes) {
-      if (shape.name != name || shape.destroying) continue;
-      if (best == null || shape.y > best.y) {
-        best = shape;
-      }
-    }
-    return best;
+  /// 인식된 이름과 같은, 아직 제거 중이 아닌 낙하 도형을 모두 반환한다.
+  List<FallingShape> _allMatches(String name) {
+    return _shapes
+        .where((s) => s.name == name && !s.destroying)
+        .toList();
   }
 
   void _restart() {
