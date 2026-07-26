@@ -21,6 +21,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 16)); // 게임 루프 1프레임
 
     expect(find.text('점수 0'), findsOneWidget);
-    expect(find.text('❤️ x3'), findsOneWidget);
+    expect(find.text('❤️ x5'), findsOneWidget);
+    expect(find.text('Lv.1'), findsOneWidget);
   });
 }

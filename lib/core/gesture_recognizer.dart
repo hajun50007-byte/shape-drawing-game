@@ -32,6 +32,11 @@ class UnistrokeRecognizer {
   static final double _halfDiagonal =
       0.5 * math.sqrt(_squareSize * _squareSize * 2);
 
+  /// extent(면적 ÷ 바운딩박스 면적) 차이가 이 값을 넘는 템플릿은 후보에서
+  /// 제외한다. 원≈0.785 / 사각형≈1.0 / 삼각형≈0.5로 서로 0.2 이상 떨어져
+  /// 있어, 이 게이트만으로 사각형이 원으로 오인식되는 문제가 걸러진다.
+  static const double _extentTolerance = 0.12;
+
   final List<ShapeTemplate> _normalizedTemplates;
 
   // 각 정규화 템플릿의 점 순서를 뒤집은 버전. 사용자가 도형을 시계/반시계
@@ -39,12 +44,17 @@ class UnistrokeRecognizer {
   // 비교해 더 가까운 쪽을 사용한다. _normalizedTemplates와 인덱스가 대응한다.
   late final List<List<Point>> _reversedTemplatePoints;
 
+  /// 각 템플릿의 extent. 정규화된 좌표 기준으로 미리 계산해둔다.
+  late final List<double> _templateExtents;
+
   UnistrokeRecognizer(List<ShapeTemplate> rawTemplates)
       : _normalizedTemplates = rawTemplates
             .map((t) => ShapeTemplate(t.name, _normalize(t.points)))
             .toList() {
     _reversedTemplatePoints =
         _normalizedTemplates.map((t) => t.points.reversed.toList()).toList();
+    _templateExtents =
+        _normalizedTemplates.map((t) => _extentOf(t.points)).toList();
   }
 
   /// 손가락 궤적(raw)을 등록된 템플릿과 비교
@@ -53,11 +63,16 @@ class UnistrokeRecognizer {
       return const RecognitionResult('unknown', 0);
     }
     final candidate = _normalize(rawPoints);
+    final candidateExtent = _extentOf(candidate);
 
     String bestName = 'unknown';
     double bestDistance = double.infinity;
 
     for (int i = 0; i < _normalizedTemplates.length; i++) {
+      // extent 게이트: 면적 비율이 크게 다른 템플릿은 아예 비교하지 않는다.
+      if ((candidateExtent - _templateExtents[i]).abs() > _extentTolerance) {
+        continue;
+      }
       final t = _normalizedTemplates[i];
       final forwardDistance = _bestCyclicDistance(candidate, t.points);
       final reversedDistance =
@@ -69,9 +84,38 @@ class UnistrokeRecognizer {
       }
     }
 
+    // 게이트를 통과한 템플릿이 하나도 없으면 어떤 도형도 아니라고 본다.
+    if (bestDistance == double.infinity) {
+      return const RecognitionResult('unknown', 0);
+    }
+
     final score =
         math.max(0.0, (1 - bestDistance / _halfDiagonal) * 100).toDouble();
     return RecognitionResult(bestName, score);
+  }
+
+  /// 신발끈 공식으로 구한 도형 면적 ÷ 바운딩박스 면적.
+  /// 마지막 점과 첫 점을 잇는 닫힌 다각형으로 취급한다.
+  static double _extentOf(List<Point> points) {
+    double doubleArea = 0;
+    for (int i = 0; i < points.length; i++) {
+      final a = points[i];
+      final b = points[(i + 1) % points.length];
+      doubleArea += a.x * b.y - b.x * a.y;
+    }
+    final area = doubleArea.abs() / 2;
+
+    double minX = double.infinity, minY = double.infinity;
+    double maxX = -double.infinity, maxY = -double.infinity;
+    for (final p in points) {
+      minX = math.min(minX, p.x);
+      minY = math.min(minY, p.y);
+      maxX = math.max(maxX, p.x);
+      maxY = math.max(maxY, p.y);
+    }
+    final boundingArea = (maxX - minX) * (maxY - minY);
+    if (boundingArea == 0) return 0;
+    return area / boundingArea;
   }
 
   // ---------------- 내부 정규화 파이프라인 ----------------

@@ -29,7 +29,7 @@ class HomeScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    '떨어지는 도형과 같은 모양을 손가락으로 그려서 없애보세요.',
+                    '떨어지는 도형과 같은 모양을 아래 패드에 그려서 없애보세요.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.white70),
                   ),
@@ -38,6 +38,14 @@ class HomeScreen extends StatelessWidget {
                   const _ModeButton(label: '1단계', config: RunPresets.stage1),
                   const _ModeButton(label: '2단계', config: RunPresets.stage2),
                   const _ModeButton(label: '3단계', config: RunPresets.stage3),
+                  const SizedBox(height: 24),
+                  const _SectionLabel('특별 스테이지 (다층 도형)'),
+                  const _ModeButton(
+                      label: '특별 · 2층', config: RunPresets.specialStage),
+                  const _ModeButton(
+                      label: '보스 10단계 · 3층', config: RunPresets.boss10),
+                  const _ModeButton(
+                      label: '보스 20단계 · 4층', config: RunPresets.boss20),
                   const SizedBox(height: 24),
                   const _SectionLabel('레이드 모드'),
                   for (final config in RunPresets.raidCheckpoints)
@@ -66,7 +74,8 @@ class _SectionLabel extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Align(
         alignment: Alignment.centerLeft,
-        child: Text(text, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+        child: Text(text,
+            style: const TextStyle(color: Colors.white54, fontSize: 13)),
       ),
     );
   }
@@ -90,7 +99,16 @@ class _ModeButton extends StatelessWidget {
               MaterialPageRoute(builder: (_) => GameScreen(runConfig: config)),
             );
           },
-          child: Text(label),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(label),
+              Text(
+                config.resolvedTheme.name,
+                style: const TextStyle(fontSize: 11, color: Colors.white54),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -1,3 +1,5 @@
+import 'stage_theme.dart';
+
 /// 난이도 1단계당 구체적인 게임플레이 수치.
 /// 아래 값은 전부 실측 전 시작 가설값 — Phase 1 플레이테스트하며 조정할 것.
 class DifficultyParams {
@@ -84,43 +86,99 @@ class RunConfig {
   final Duration? duration; // null = 레이드
   final int startLives;
 
+  /// 다층 도형이 나올 때의 레이어 수. 1이면 다층 도형이 없는 일반 스테이지,
+  /// 특별 스테이지는 2, 보스(10/20단계)는 3~4를 쓴다.
+  final int maxLayers;
+
+  /// 도형이 스폰될 때 다층 도형으로 나올 확률(0~1).
+  final double multiLayerChance;
+
+  /// 구간 테마. null이면 minDifficulty로부터 자동 선택한다.
+  final StageTheme? theme;
+
   const RunConfig({
     required this.id,
     required this.minDifficulty,
     required this.maxDifficulty,
     required this.duration,
     required this.startLives,
+    this.maxLayers = 1,
+    this.multiLayerChance = 0,
+    this.theme,
   });
 
   bool get isRaid => duration == null;
+
+  StageTheme get resolvedTheme =>
+      theme ?? StageTheme.forDifficulty(minDifficulty);
 }
 
 /// Phase 1 비교 테스트용 프리셋.
 /// 스테이지: 1씩 슬라이딩(1~3/2~4/3~5) — 촘촘하고 부드러운 개별 성장감
 /// 레이드: 2씩 점프하는 체크포인트(1~3/3~5/5~7) — 굵직한 압박감, "1/3/5단계"로 라벨링
 class RunPresets {
+  /// 스테이지 공통 진행 시간. (Phase 2에서 1분 30초 -> 1분으로 단축)
+  static const stageDuration = Duration(minutes: 1);
+
+  /// 공통 시작 라이프. (Phase 2에서 3 -> 5로 변경)
+  static const startLives = 5;
+
   static const stage1 = RunConfig(
     id: 'stage_1',
     minDifficulty: 1,
     maxDifficulty: 3,
-    duration: Duration(minutes: 1, seconds: 30),
-    startLives: 3,
+    duration: stageDuration,
+    startLives: startLives,
   );
 
   static const stage2 = RunConfig(
     id: 'stage_2',
     minDifficulty: 2,
     maxDifficulty: 4,
-    duration: Duration(minutes: 1, seconds: 30),
-    startLives: 3,
+    duration: stageDuration,
+    startLives: startLives,
   );
 
   static const stage3 = RunConfig(
     id: 'stage_3',
     minDifficulty: 3,
     maxDifficulty: 5,
-    duration: Duration(minutes: 1, seconds: 30),
-    startLives: 3,
+    duration: stageDuration,
+    startLives: startLives,
+  );
+
+  /// 다층 도형이 등장하는 특별 스테이지(2층).
+  static const specialStage = RunConfig(
+    id: 'stage_special',
+    minDifficulty: 3,
+    maxDifficulty: 5,
+    duration: stageDuration,
+    startLives: startLives,
+    maxLayers: 2,
+    multiLayerChance: 0.35,
+  );
+
+  /// 보스 스테이지. 10단계는 3층, 20단계는 4층까지 쌓인다.
+  static const boss10 = RunConfig(
+    id: 'boss_10',
+    minDifficulty: 5,
+    maxDifficulty: 7,
+    duration: stageDuration,
+    startLives: startLives,
+    maxLayers: 3,
+    multiLayerChance: 0.5,
+    theme: StageTheme.accelerationLine,
+  );
+
+  static const boss20 = RunConfig(
+    id: 'boss_20',
+    minDifficulty: 6,
+    maxDifficulty: 7,
+    duration: stageDuration,
+    startLives: startLives,
+    maxLayers: 4,
+    multiLayerChance: 0.6,
+    theme: StageTheme.accelerationLine,
   );
 
   /// 레이드 체크포인트 구간. UI 라벨은 "1단계/3단계/5단계"로 표시.
@@ -130,18 +188,18 @@ class RunPresets {
         minDifficulty: 1,
         maxDifficulty: 3,
         duration: null,
-        startLives: 3),
+        startLives: startLives),
     RunConfig(
         id: 'raid_3',
         minDifficulty: 3,
         maxDifficulty: 5,
         duration: null,
-        startLives: 3),
+        startLives: startLives),
     RunConfig(
         id: 'raid_5',
         minDifficulty: 5,
         maxDifficulty: 7,
         duration: null,
-        startLives: 3),
+        startLives: startLives),
   ];
 }
