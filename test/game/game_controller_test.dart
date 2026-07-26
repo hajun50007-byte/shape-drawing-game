@@ -239,6 +239,35 @@ void main() {
     });
   });
 
+  group('도형별 통과 기준 보정', () {
+    test('사각형만 기본 기준보다 8점 낮다', () {
+      for (final level in [1.0, 3.0, 5.0, 7.0]) {
+        final base = DifficultyTable.paramsFor(level).recognitionThreshold;
+        expect(DifficultyTable.thresholdFor(level, 'square'), base - 8);
+        expect(DifficultyTable.thresholdFor(level, 'circle'), base);
+        expect(DifficultyTable.thresholdFor(level, 'triangle'), base);
+      }
+    });
+
+    test('보정값이 없는 이름은 기본 기준을 그대로 쓴다', () {
+      final base = DifficultyTable.paramsFor(1).recognitionThreshold;
+      expect(DifficultyTable.thresholdFor(1, 'unknown'), base);
+    });
+
+    test('보정된 기준이 실제 판정에 적용된다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.add(_shape(['square']));
+
+      _draw(controller, 'square');
+
+      expect(controller.shapes.single.isCleared, isTrue);
+      expect(controller.lastAppliedThreshold,
+          DifficultyTable.paramsFor(RunPresets.stage1.minDifficulty)
+                  .recognitionThreshold -
+              8);
+    });
+  });
+
   group('난이도 표시', () {
     test('내부 보간은 소수, 표시는 내림한 정수', () {
       final controller = _controllerFor(RunPresets.stage1);

@@ -66,13 +66,28 @@ class DebugRecognitionPanel extends StatelessWidget {
     super.key,
     required this.recognition,
     required this.threshold,
+    required this.baseThreshold,
   });
 
   final RecognitionResult? recognition;
+
+  /// 도형별 보정이 반영된, 실제로 적용된 통과 기준.
   final double threshold;
+
+  /// 보정 전 기본 통과 기준.
+  final double baseThreshold;
 
   static const _label = TextStyle(color: Colors.orangeAccent, fontSize: 11);
   static const _row = TextStyle(color: Colors.white70, fontSize: 11);
+
+  /// 도형별 보정이 걸렸을 때만 "(기본 64.0 −8.0)"처럼 덧붙인다.
+  String _adjustmentLabel() {
+    final delta = threshold - baseThreshold;
+    if (delta.abs() < 0.05) return '';
+    final sign = delta < 0 ? '−' : '+';
+    return ' (기본 ${baseThreshold.toStringAsFixed(1)}'
+        ' $sign${delta.abs().toStringAsFixed(1)})';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -92,6 +107,7 @@ class DebugRecognitionPanel extends StatelessWidget {
           Text(
             '[DEBUG] extent ${r.candidateExtent.toStringAsFixed(3)}'
             ' · 통과기준 ${threshold.toStringAsFixed(1)}'
+            '${_adjustmentLabel()}'
             ' · 판정 ${r.name} ${r.score.toStringAsFixed(1)}',
             style: _label,
           ),

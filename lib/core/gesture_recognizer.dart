@@ -71,15 +71,18 @@ class UnistrokeRecognizer {
       0.5 * math.sqrt(_squareSize * _squareSize * 2);
 
   /// extent(면적 ÷ 바운딩박스 면적) 차이가 이 값 이하면 감점 없음.
-  /// 원≈0.785 / 사각형≈1.0 / 삼각형≈0.5로 서로 0.2 이상 떨어져 있어,
-  /// 이 페널티만으로 사각형이 원으로 오인식되는 문제가 걸러진다.
+  /// 원≈0.785 / 사각형≈1.0 / 삼각형≈0.5.
   ///
   /// 하드 컷이 아니라 소프트 페널티라, 애매하게 그린 도형도 점수만 깎이고
   /// 후보로는 남는다. 두 상수는 디버그 오버레이를 보며 튜닝하는 값이다.
-  static const double extentPenaltyStart = 0.08;
+  ///
+  /// 현재 범위는 의도적으로 느슨하다: 원-사각형 차이(≈0.21)가 start 안에
+  /// 들어와 서로 감점하지 않으므로, 둘의 구분은 순환정렬 기본 점수에 맡기고
+  /// extent는 삼각형처럼 명백히 다른 도형만 걸러낸다.
+  static const double extentPenaltyStart = 0.22;
 
   /// 이 차이 이상이면 페널티가 0(사실상 후보에서 탈락).
-  static const double extentPenaltyEnd = 0.30;
+  static const double extentPenaltyEnd = 0.55;
 
   /// extent 차이에 따른 0~1 배율. start 이하면 1, end 이상이면 0,
   /// 그 사이는 선형으로 감소한다.

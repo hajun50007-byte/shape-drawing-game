@@ -57,46 +57,59 @@ void main() {
       expect(result.name, 'square');
     });
 
-    test('extent 페널티 곡선: 0.08 이하는 감점 없음, 0.30 이상은 0', () {
+    test('extent 페널티 곡선은 start~end 사이에서 선형으로 감소한다', () {
+      const start = UnistrokeRecognizer.extentPenaltyStart;
+      const end = UnistrokeRecognizer.extentPenaltyEnd;
+
+      // 현재 튜닝값. 바꿀 때 의도적으로 바꾸도록 고정해둔다.
+      expect(start, 0.22);
+      expect(end, 0.55);
+
       expect(UnistrokeRecognizer.extentPenalty(0), 1.0);
-      expect(UnistrokeRecognizer.extentPenalty(0.08), 1.0);
-      expect(UnistrokeRecognizer.extentPenalty(0.30), 0.0);
-      expect(UnistrokeRecognizer.extentPenalty(0.5), 0.0);
-      // 중간값은 선형 감소 — 0.19는 정확히 절반.
-      expect(UnistrokeRecognizer.extentPenalty(0.19), closeTo(0.5, 1e-9));
+      expect(UnistrokeRecognizer.extentPenalty(start), 1.0);
+      expect(UnistrokeRecognizer.extentPenalty(end), 0.0);
+      expect(UnistrokeRecognizer.extentPenalty(end + 0.2), 0.0);
+      expect(UnistrokeRecognizer.extentPenalty((start + end) / 2),
+          closeTo(0.5, 1e-9));
     });
 
-    test('하드 컷이 아니라 소프트 페널티라 모든 템플릿이 채점된다', () {
+    test('느슨한 범위에서 원-사각형은 서로 감점하지 않는다', () {
       final recognizer = UnistrokeRecognizer(ShapeTemplates.all);
       final result = recognizer.recognize(ShapeTemplates.square.points);
 
-      // extent 차이가 커도 후보에서 빠지지 않고 내역이 남는다.
+      // 하드 컷이 아니므로 모든 템플릿의 채점 내역이 남는다.
       expect(result.evaluations.map((e) => e.name),
           containsAll(['circle', 'triangle', 'square']));
-      expect(result.candidateExtent, greaterThan(0));
 
       final square = result.evaluations.firstWhere((e) => e.name == 'square');
-      expect(square.penalty, 1.0);
-      expect(square.finalScore, closeTo(square.baseScore, 1e-9));
-
-      // 원은 extent 차이(≈0.21)로 감점돼 사각형보다 낮은 최종 점수가 된다.
       final circle = result.evaluations.firstWhere((e) => e.name == 'circle');
-      expect(circle.penalty, lessThan(1.0));
-      expect(circle.finalScore, lessThan(square.finalScore));
+      final triangle =
+          result.evaluations.firstWhere((e) => e.name == 'triangle');
+
+      // 원-사각형 extent 차이(≈0.214)는 start(0.22) 안이라 둘 다 감점 없음.
+      // 즉 이 둘의 구분은 순환정렬 기본 점수가 담당한다.
+      expect(circle.extentDiff, lessThan(UnistrokeRecognizer.extentPenaltyStart));
+      expect(circle.penalty, 1.0);
+      expect(square.penalty, 1.0);
+      expect(circle.baseScore, lessThan(square.baseScore));
+      expect(result.name, 'square');
+
+      // 삼각형처럼 명백히 다른 도형만 extent로 걸러진다.
+      expect(triangle.penalty, lessThan(0.5));
+      expect(triangle.finalScore, lessThan(square.finalScore));
     });
 
-    test('extent 페널티: 면적 비율이 어느 템플릿과도 다르면 unknown', () {
+    test('면적이 없는 직선은 통과 기준에 한참 못 미치는 점수만 받는다', () {
       final recognizer = UnistrokeRecognizer(ShapeTemplates.all);
 
-      // 거의 직선에 가까운 궤적은 면적이 0에 수렴해 어떤 템플릿의
-      // extent와도 0.12 이상 차이가 난다.
       final line = [
         for (int i = 0; i <= 20; i++) Point(i * 5.0, i * 5.0),
       ];
 
       final result = recognizer.recognize(line);
-      expect(result.name, 'unknown');
-      expect(result.score, 0);
+      // 느슨해진 범위에서는 삼각형 페널티가 완전히 0이 되지 않아 이름이
+      // 붙을 수 있지만, 어떤 난이도의 통과 기준(52~72)에도 못 미친다.
+      expect(result.score, lessThan(20));
     });
   });
 }

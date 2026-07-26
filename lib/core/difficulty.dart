@@ -74,6 +74,20 @@ class DifficultyTable {
     );
   }
 
+  /// 도형별 통과 기준 보정값(점). 음수면 그만큼 통과가 쉬워진다.
+  ///
+  /// 사각형은 빠르게 그리면 모서리가 둥글려져 원과 구분이 어려워지는
+  /// 구조적 불리함이 있어 기준을 낮춰준다. 여기에 없는 도형은 보정 0.
+  static const Map<String, double> shapeThresholdAdjustments = {
+    'square': -8,
+  };
+
+  /// 해당 난이도의 기본 통과 기준에 도형별 보정을 더한 값.
+  static double thresholdFor(double level, String shapeName) {
+    final base = paramsFor(level).recognitionThreshold;
+    return base + (shapeThresholdAdjustments[shapeName] ?? 0);
+  }
+
   static double _lerp(double a, double b, double t) => a + (b - a) * t;
 }
 

@@ -132,7 +132,9 @@ class _GameScreenState extends State<GameScreen>
                     bottom: padHeight + 8,
                     child: DebugRecognitionPanel(
                       recognition: _controller.lastRecognition,
-                      threshold: _controller.currentThreshold,
+                      threshold: _controller.lastAppliedThreshold ??
+                          _controller.currentThreshold,
+                      baseThreshold: _controller.currentThreshold,
                     ),
                   ),
                   Positioned.fill(

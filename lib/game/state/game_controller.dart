@@ -99,9 +99,12 @@ class GameController extends ChangeNotifier {
   /// 오버레이에서 읽는다(릴리즈 빌드에서는 표시되지 않는다).
   core.RecognitionResult? get lastRecognition => _lastRecognition;
 
-  /// 마지막 인식에 적용된 통과 기준 점수.
+  /// 현재 난이도의 기본 통과 기준(도형별 보정 전).
   double get currentThreshold =>
       DifficultyTable.paramsFor(_difficultyLevel).recognitionThreshold;
+
+  /// 마지막 인식에 실제로 적용된 통과 기준(도형별 보정 반영).
+  double? get lastAppliedThreshold => _lastAppliedThreshold;
 
   /// 0~1. 라이프가 깎인 직후 1이 되고 시간에 따라 줄어든다.
   double get damageFlash => _damageFlash;
@@ -134,6 +137,7 @@ class GameController extends ChangeNotifier {
   double? _lastMissScore;
   double? _lastMissThreshold;
   core.RecognitionResult? _lastRecognition;
+  double? _lastAppliedThreshold;
   double _damageFlash = 0;
   double _comboGauge = 0;
   bool _skillHeld = false;
@@ -396,8 +400,10 @@ class GameController extends ChangeNotifier {
 
     final result = _recognizer.recognize(strokePoints);
     _lastRecognition = result;
-    final params = DifficultyTable.paramsFor(_difficultyLevel);
-    final passed = result.score >= params.recognitionThreshold;
+    // 통과 기준은 인식된 도형에 따라 보정된다(예: 사각형은 -8점).
+    final threshold = DifficultyTable.thresholdFor(_difficultyLevel, result.name);
+    _lastAppliedThreshold = threshold;
+    final passed = result.score >= threshold;
 
     final clearedCount = passed ? _clearMatching(result.name) : 0;
 
@@ -421,7 +427,7 @@ class GameController extends ChangeNotifier {
     } else {
       _strokeFeedback = StrokeFeedback.miss;
       _lastMissScore = result.score;
-      _lastMissThreshold = params.recognitionThreshold;
+      _lastMissThreshold = threshold;
       _missScoreRemaining = missScoreDuration;
     }
 
@@ -476,6 +482,7 @@ class GameController extends ChangeNotifier {
     _comboGauge = 0;
     _skillHeld = false;
     _lastRecognition = null;
+    _lastAppliedThreshold = null;
     _doubleClearRemaining = Duration.zero;
     _doubleClearScore = 0;
     _bossCooldownRemaining = Duration.zero;
