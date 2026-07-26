@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 
 import '../core/difficulty.dart';
 import '../core/gesture_recognizer.dart' as core;
@@ -15,6 +16,9 @@ enum _GameStatus { playing, cleared, gameOver }
 /// 레이드(무한 진행) 모드에서 min~max 난이도까지 올라가는 데 걸리는 시간.
 /// duration이 없는 RunConfig(RunPresets.raidCheckpoints)에 적용된다.
 const Duration _raidDifficultyRampDuration = Duration(minutes: 2);
+
+/// 화면 하단 드로잉 패드가 차지하는 비율. 상단은 낙하 도형 전용 표시 영역.
+const double _padHeightFraction = 0.33;
 
 class GameScreen extends StatefulWidget {
   const GameScreen({super.key, required this.runConfig});
@@ -47,7 +51,13 @@ class _GameScreenState extends State<GameScreen>
   _GameStatus _status = _GameStatus.playing;
   Timer? _feedbackClearTimer;
 
-  Size _canvasSize = Size.zero;
+  // 인식 실패 시 디버깅용으로 잠깐 보여주는 유사도 점수.
+  double? _lastMissScore;
+  double? _lastMissThreshold;
+  Timer? _missScoreClearTimer;
+
+  // 낙하 도형이 떠 있는 상단 표시 영역의 크기(드로잉 패드 제외).
+  Size _fieldSize = Size.zero;
 
   @override
   void initState() {
@@ -64,13 +74,14 @@ class _GameScreenState extends State<GameScreen>
   void dispose() {
     _ticker.dispose();
     _feedbackClearTimer?.cancel();
+    _missScoreClearTimer?.cancel();
     super.dispose();
   }
 
   void _onTick(Duration elapsed) {
     final dt = elapsed - _lastElapsed;
     _lastElapsed = elapsed;
-    if (_status != _GameStatus.playing || _canvasSize == Size.zero) return;
+    if (_status != _GameStatus.playing || _fieldSize == Size.zero) return;
 
     setState(() {
       _runElapsed += dt;
@@ -87,13 +98,16 @@ class _GameScreenState extends State<GameScreen>
 
       final dtSeconds = dt.inMicroseconds / Duration.microsecondsPerSecond;
       for (final shape in _shapes) {
+        if (shape.destroying) continue;
         shape.y += params.fallSpeed * dtSeconds;
       }
 
-      final missedCount =
-          _shapes.where((s) => s.y - s.size / 2 > _canvasSize.height).length;
+      bool isMissed(FallingShape s) =>
+          !s.destroying && s.y - s.size / 2 > _fieldSize.height;
+
+      final missedCount = _shapes.where(isMissed).length;
       if (missedCount > 0) {
-        _shapes.removeWhere((s) => s.y - s.size / 2 > _canvasSize.height);
+        _shapes.removeWhere(isMissed);
         _lives -= missedCount;
         if (_lives <= 0) {
           _lives = 0;
@@ -124,7 +138,7 @@ class _GameScreenState extends State<GameScreen>
   void _spawnShape() {
     const size = 72.0;
     final margin = size;
-    final width = _canvasSize.width;
+    final width = _fieldSize.width;
     final x = width <= margin * 2
         ? width / 2
         : margin + _random.nextDouble() * (width - margin * 2);
@@ -165,20 +179,37 @@ class _GameScreenState extends State<GameScreen>
     final result = _recognizer.recognize(_strokePoints);
     final params = DifficultyTable.paramsFor(_difficultyLevel);
 
-    FallingShape? target;
-    if (result.score >= params.recognitionThreshold) {
-      target = _closestShapeToStroke(result.name);
-    }
+    final FallingShape? target = result.score >= params.recognitionThreshold
+        ? _mostUrgentMatch(result.name)
+        : null;
 
     setState(() {
       if (target != null) {
-        _shapes.remove(target);
+        target.destroying = true;
         _score += result.score.round();
         _strokeFeedback = StrokeFeedback.hit;
+        _lastMissScore = null;
       } else {
         _strokeFeedback = StrokeFeedback.miss;
+        _lastMissScore = result.score;
+        _lastMissThreshold = params.recognitionThreshold;
       }
     });
+
+    if (target != null) {
+      HapticFeedback.lightImpact();
+      SystemSound.play(SystemSoundType.click);
+      Timer(const Duration(milliseconds: 150), () {
+        if (!mounted) return;
+        setState(() => _shapes.remove(target));
+      });
+    } else {
+      _missScoreClearTimer?.cancel();
+      _missScoreClearTimer = Timer(const Duration(milliseconds: 1200), () {
+        if (!mounted) return;
+        setState(() => _lastMissScore = null);
+      });
+    }
 
     _feedbackClearTimer?.cancel();
     _feedbackClearTimer = Timer(const Duration(milliseconds: 180), () {
@@ -190,31 +221,23 @@ class _GameScreenState extends State<GameScreen>
     });
   }
 
-  FallingShape? _closestShapeToStroke(String name) {
-    final candidates = _shapes.where((s) => s.name == name).toList();
-    if (candidates.isEmpty) return null;
-
-    final cx =
-        _strokePoints.map((p) => p.x).reduce((a, b) => a + b) / _strokePoints.length;
-    final cy =
-        _strokePoints.map((p) => p.y).reduce((a, b) => a + b) / _strokePoints.length;
-
-    candidates.sort((a, b) {
-      final da = _squaredDistance(a.x, a.y, cx, cy);
-      final db = _squaredDistance(b.x, b.y, cx, cy);
-      return da.compareTo(db);
-    });
-    return candidates.first;
-  }
-
-  double _squaredDistance(double x1, double y1, double x2, double y2) {
-    final dx = x1 - x2;
-    final dy = y1 - y2;
-    return dx * dx + dy * dy;
+  /// 같은 이름의 낙하 도형이 여럿이면, 화면 아래(놓치기 직전)에 가장 가까운
+  /// 것을 우선 제거한다. 드로잉 패드와 낙하 구역의 좌표계가 분리되어 있어
+  /// 그린 위치와 도형 위치를 직접 비교할 수 없기 때문.
+  FallingShape? _mostUrgentMatch(String name) {
+    FallingShape? best;
+    for (final shape in _shapes) {
+      if (shape.name != name || shape.destroying) continue;
+      if (best == null || shape.y > best.y) {
+        best = shape;
+      }
+    }
+    return best;
   }
 
   void _restart() {
     _feedbackClearTimer?.cancel();
+    _missScoreClearTimer?.cancel();
     setState(() {
       _shapes.clear();
       _strokePoints.clear();
@@ -224,6 +247,8 @@ class _GameScreenState extends State<GameScreen>
       _runElapsed = Duration.zero;
       _sinceLastSpawn = Duration.zero;
       _strokeFeedback = null;
+      _lastMissScore = null;
+      _lastMissThreshold = null;
       _status = _GameStatus.playing;
     });
   }
@@ -235,22 +260,52 @@ class _GameScreenState extends State<GameScreen>
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            _canvasSize = Size(constraints.maxWidth, constraints.maxHeight);
+            final totalWidth = constraints.maxWidth;
+            final totalHeight = constraints.maxHeight;
+            final padHeight = totalHeight * _padHeightFraction;
+            final fieldHeight = totalHeight - padHeight;
+            _fieldSize = Size(totalWidth, fieldHeight);
+
             return Stack(
               children: [
                 Positioned.fill(
-                  child: GestureDetector(
-                    onPanStart: _onPanStart,
-                    onPanUpdate: _onPanUpdate,
-                    onPanEnd: _onPanEnd,
-                    child: CustomPaint(
-                      size: Size.infinite,
-                      painter: GameCanvasPainter(
-                        shapes: _shapes,
-                        strokePoints: _strokePoints,
-                        strokeFeedback: _strokeFeedback,
+                  child: Column(
+                    children: [
+                      // 상단: 낙하 도형 표시 전용. GestureDetector가 없으므로
+                      // 이 영역의 터치는 드로잉으로 처리되지 않는다.
+                      ClipRect(
+                        child: SizedBox(
+                          width: totalWidth,
+                          height: fieldHeight,
+                          child: CustomPaint(
+                            painter: FallingFieldPainter(shapes: _shapes),
+                          ),
+                        ),
                       ),
-                    ),
+                      // 하단: 고정 드로잉 패드.
+                      Container(
+                        width: totalWidth,
+                        height: padHeight,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF181C26),
+                          border: Border(
+                            top: BorderSide(color: Colors.white24, width: 2),
+                          ),
+                        ),
+                        child: GestureDetector(
+                          onPanStart: _onPanStart,
+                          onPanUpdate: _onPanUpdate,
+                          onPanEnd: _onPanEnd,
+                          child: CustomPaint(
+                            size: Size(totalWidth, padHeight),
+                            painter: StrokePadPainter(
+                              strokePoints: _strokePoints,
+                              feedback: _strokeFeedback,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 Positioned(
@@ -274,6 +329,18 @@ class _GameScreenState extends State<GameScreen>
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ),
+                if (_lastMissScore != null)
+                  Positioned(
+                    top: fieldHeight - 30,
+                    left: 0,
+                    right: 0,
+                    child: Center(
+                      child: _DebugScoreBadge(
+                        score: _lastMissScore!,
+                        threshold: _lastMissThreshold ?? 0,
+                      ),
+                    ),
+                  ),
                 if (_status != _GameStatus.playing)
                   _GameEndOverlay(
                     cleared: _status == _GameStatus.cleared,
@@ -323,6 +390,29 @@ class _Hud extends StatelessWidget {
     final minutes = clamped.inMinutes;
     final seconds = clamped.inSeconds % 60;
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+}
+
+/// 인식 실패 시 유사도/통과 기준 점수를 잠깐 보여주는 디버그용 배지.
+class _DebugScoreBadge extends StatelessWidget {
+  const _DebugScoreBadge({required this.score, required this.threshold});
+
+  final double score;
+  final double threshold;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        '[DEBUG] 유사도 ${score.toStringAsFixed(1)} / 필요 ${threshold.toStringAsFixed(1)}',
+        style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+      ),
+    );
   }
 }
 

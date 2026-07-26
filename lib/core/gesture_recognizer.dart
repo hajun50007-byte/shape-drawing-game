@@ -65,9 +65,11 @@ class UnistrokeRecognizer {
   // ---------------- 내부 정규화 파이프라인 ----------------
 
   static List<Point> _normalize(List<Point> points) {
+    // 회전 정규화(indicative angle 계산 + rotateBy)는 의도적으로 생략한다.
+    // 이 게임의 도형은 항상 정방향으로만 제시되므로 회전 보정이 오히려
+    // 유사한 도형(예: 사각형 vs 마름모로 치우친 입력)을 오인식시키는
+    // 불안정성의 원인이었다.
     var pts = _resample(points, _numResamplePoints);
-    final angle = _indicativeAngle(pts);
-    pts = _rotateBy(pts, -angle);
     pts = _scaleToSquare(pts, _squareSize);
     pts = _translateToOrigin(pts);
     return pts;
@@ -126,13 +128,6 @@ class UnistrokeRecognizer {
     return math.sqrt(dx * dx + dy * dy);
   }
 
-  static double _indicativeAngle(List<Point> points) {
-    final c = _centroid(points);
-    // Flutter 좌표계는 y가 아래로 증가하므로, 실제 기기 테스트하며
-    // 부호가 반대로 느껴지면 이 함수의 부호를 뒤집어 조정할 것.
-    return math.atan2(c.y - points.first.y, points.first.x - c.x);
-  }
-
   static Point _centroid(List<Point> points) {
     double sx = 0, sy = 0;
     for (final p in points) {
@@ -140,20 +135,6 @@ class UnistrokeRecognizer {
       sy += p.y;
     }
     return Point(sx / points.length, sy / points.length);
-  }
-
-  static List<Point> _rotateBy(List<Point> points, double angle) {
-    final c = _centroid(points);
-    final cosA = math.cos(angle);
-    final sinA = math.sin(angle);
-    return points.map((p) {
-      final dx = p.x - c.x;
-      final dy = p.y - c.y;
-      return Point(
-        dx * cosA - dy * sinA + c.x,
-        dx * sinA + dy * cosA + c.y,
-      );
-    }).toList();
   }
 
   static List<Point> _scaleToSquare(List<Point> points, double size) {

@@ -14,4 +14,8 @@ class FallingShape {
   final double x;
   final double size;
   double y;
+
+  /// 매칭에 성공해 제거 애니메이션(플래시) 중인지 여부.
+  /// true인 동안은 낙하도, "놓침" 판정도 멈춘다.
+  bool destroying = false;
 }
