@@ -59,9 +59,9 @@ class UnistrokeRecognizer {
 
     for (int i = 0; i < _normalizedTemplates.length; i++) {
       final t = _normalizedTemplates[i];
-      final forwardDistance = _pathDistance(candidate, t.points);
+      final forwardDistance = _bestCyclicDistance(candidate, t.points);
       final reversedDistance =
-          _pathDistance(candidate, _reversedTemplatePoints[i]);
+          _bestCyclicDistance(candidate, _reversedTemplatePoints[i]);
       final d = math.min(forwardDistance, reversedDistance);
       if (d < bestDistance) {
         bestDistance = d;
@@ -77,9 +77,10 @@ class UnistrokeRecognizer {
   // ---------------- 내부 정규화 파이프라인 ----------------
 
   static List<Point> _normalize(List<Point> points) {
+    // 회전 보정(indicative angle) 없이 리샘플 -> 스케일 -> 원점 이동만 적용한다.
+    // 시작점/방향에 따른 정렬 문제는 recognize()의 순환 정렬(cyclic shift)
+    // 최적화와 정방향/역방향 비교가 대신 흡수한다.
     var pts = _resample(points, _numResamplePoints);
-    final angle = _indicativeAngle(pts);
-    pts = _rotateBy(pts, -angle);
     pts = _scaleToSquare(pts, _squareSize);
     pts = _translateToOrigin(pts);
     return pts;
@@ -147,33 +148,6 @@ class UnistrokeRecognizer {
     return Point(sx / points.length, sy / points.length);
   }
 
-  static double _indicativeAngle(List<Point> points) {
-    final c = _centroid(points);
-    // Flutter 좌표계는 y가 아래로 증가하므로, 실제 기기 테스트하며
-    // 부호가 반대로 느껴지면 이 함수의 부호를 뒤집어 조정할 것.
-    //
-    // 이 회전 보정은 사용자가 도형 테두리의 어느 지점부터 그리기 시작하든
-    // (예: 원을 위에서부터 vs 옆에서부터) 리샘플된 점 배열이 템플릿과 같은
-    // 방향으로 정렬되게 해준다. 우리 템플릿(원/삼각형/사각형/별)은 모두
-    // 충분히 대칭적이라 시작점이 달라도 사실상 점 집합 전체가 회전한 것과
-    // 동일하므로, 이 정규화 없이는 시작점에 따라 점수가 크게 흔들린다.
-    return math.atan2(c.y - points.first.y, points.first.x - c.x);
-  }
-
-  static List<Point> _rotateBy(List<Point> points, double angle) {
-    final c = _centroid(points);
-    final cosA = math.cos(angle);
-    final sinA = math.sin(angle);
-    return points.map((p) {
-      final dx = p.x - c.x;
-      final dy = p.y - c.y;
-      return Point(
-        dx * cosA - dy * sinA + c.x,
-        dx * sinA + dy * cosA + c.y,
-      );
-    }).toList();
-  }
-
   static List<Point> _scaleToSquare(List<Point> points, double size) {
     double minX = double.infinity, minY = double.infinity;
     double maxX = -double.infinity, maxY = -double.infinity;
@@ -198,12 +172,20 @@ class UnistrokeRecognizer {
     return points.map((p) => Point(p.x - c.x, p.y - c.y)).toList();
   }
 
-  static double _pathDistance(List<Point> a, List<Point> b) {
-    double d = 0;
+  /// a를 0~n-1칸 순환 이동(cyclic shift)시켜가며 b와의 평균 거리를 계산하고
+  /// 그중 최솟값을 반환한다. 시작점이 서로 다른 두 궤적이라도 정렬만
+  /// 맞으면 낮은 거리로 평가된다.
+  static double _bestCyclicDistance(List<Point> a, List<Point> b) {
     final n = math.min(a.length, b.length);
-    for (int i = 0; i < n; i++) {
-      d += _distance(a[i], b[i]);
+    double best = double.infinity;
+    for (int shift = 0; shift < n; shift++) {
+      double d = 0;
+      for (int i = 0; i < n; i++) {
+        d += _distance(a[(i + shift) % n], b[i]);
+      }
+      d /= n;
+      if (d < best) best = d;
     }
-    return d / n;
+    return best;
   }
 }
