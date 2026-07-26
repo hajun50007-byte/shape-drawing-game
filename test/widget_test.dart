@@ -1,30 +1,26 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:shape_drawing_game/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('홈 화면에 타이틀과 스테이지 버튼이 보인다', (WidgetTester tester) async {
+    await tester.pumpWidget(const ShapeDrawingGameApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(find.text('도형 그리기 게임'), findsOneWidget);
+    expect(find.text('1단계'), findsOneWidget);
+    expect(find.text('2단계'), findsOneWidget);
+    expect(find.text('3단계'), findsOneWidget);
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+  testWidgets('스테이지 버튼을 누르면 게임 화면으로 이동한다', (WidgetTester tester) async {
+    await tester.pumpWidget(const ShapeDrawingGameApp());
+
+    await tester.tap(find.text('1단계'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300)); // 페이지 전환 애니메이션
+    await tester.pump(const Duration(milliseconds: 16)); // 게임 루프 1프레임
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('점수 0'), findsOneWidget);
+    expect(find.text('❤️ x3'), findsOneWidget);
   });
 }
