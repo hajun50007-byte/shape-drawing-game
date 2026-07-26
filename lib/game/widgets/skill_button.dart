@@ -1,28 +1,48 @@
 import 'package:flutter/material.dart';
 
-/// 더블클리어 액티브 스킬 버튼 + 콤보 게이지.
-/// 한 번 누르면 켜진 채로 유지되며 게이지가 소모되고, 다시 누르면 꺼진다.
-/// (별도 캐릭터/아이콘 없이 버튼과 게이지로만 표시)
+/// 액티브 스킬 버튼 + 게이지 하나. 캐릭터/아이콘 없이 버튼과 게이지로만
+/// 표시한다. 두 스킬(더블클리어 토글 / 전체 레이어 제거)이 각자 독립된
+/// 게이지로 이 위젯을 하나씩 쓴다.
 class SkillButton extends StatelessWidget {
   const SkillButton({
     super.key,
+    required this.label,
     required this.gauge,
     required this.isReady,
-    required this.isActive,
-    required this.onToggle,
+    required this.onPressed,
+    this.isActive = false,
+    this.activeLabel,
+    this.accent = Colors.purple,
+    this.activeAccent = Colors.purpleAccent,
   });
 
+  /// 평소 표시할 짧은 라벨.
+  final String label;
+
+  /// 켜진 상태에서 표시할 라벨. null이면 [label]을 그대로 쓴다.
+  final String? activeLabel;
+
   final double gauge;
+
+  /// 지금 누를 수 있는지.
   final bool isReady;
+
+  /// 토글형 스킬이 켜져 있는지. 발동형 스킬은 항상 false.
   final bool isActive;
-  final VoidCallback onToggle;
+
+  final VoidCallback onPressed;
+  final Color accent;
+  final Color activeAccent;
+
+  static const double _width = 76;
 
   @override
   Widget build(BuildContext context) {
+    final enabled = isReady || isActive;
     final color = isActive
-        ? Colors.purpleAccent
+        ? activeAccent
         : isReady
-            ? Colors.purple
+            ? accent
             : Colors.white24;
 
     return Column(
@@ -30,7 +50,7 @@ class SkillButton extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         SizedBox(
-          width: 76,
+          width: _width,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
@@ -43,9 +63,9 @@ class SkillButton extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         GestureDetector(
-          onTap: (isReady || isActive) ? onToggle : null,
+          onTap: enabled ? onPressed : null,
           child: Container(
-            width: 76,
+            width: _width,
             height: 44,
             alignment: Alignment.center,
             decoration: BoxDecoration(
@@ -54,9 +74,9 @@ class SkillButton extends StatelessWidget {
               border: Border.all(color: color, width: 2),
             ),
             child: Text(
-              isActive ? '2배 ON' : '2배',
+              isActive ? (activeLabel ?? label) : label,
               style: TextStyle(
-                color: (isReady || isActive) ? Colors.white : Colors.white38,
+                color: enabled ? Colors.white : Colors.white38,
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),

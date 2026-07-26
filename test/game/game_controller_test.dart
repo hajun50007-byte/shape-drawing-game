@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shape_drawing_game/core/difficulty.dart';
 import 'package:shape_drawing_game/core/shape_templates.dart';
 import 'package:shape_drawing_game/core/stage_theme.dart';
+import 'package:shape_drawing_game/game/model/clear_effect.dart';
 import 'package:shape_drawing_game/game/model/falling_shape.dart';
 import 'package:shape_drawing_game/game/state/game_controller.dart';
 
@@ -383,6 +384,25 @@ void main() {
       }
     });
 
+    test('체크포인트 7은 동시 등장 상한이 1.5배', () {
+      final raid5 =
+          RunPresets.raidCheckpoints.firstWhere((c) => c.id == 'raid_5');
+      expect(raid5.simultaneousShapesScale, 1.0);
+      expect(raid7().simultaneousShapesScale, 1.5);
+
+      final params = DifficultyTable.paramsFor(10);
+      expect(params.maxSimultaneousShapes,
+          DifficultyTable.simultaneousShapesCap);
+
+      final base = _controllerFor(raid5).effectiveMaxSimultaneousShapes(params);
+      final boosted =
+          _controllerFor(raid7()).effectiveMaxSimultaneousShapes(params);
+
+      expect(base, DifficultyTable.simultaneousShapesCap);
+      expect(boosted, (base * 1.5).round());
+      expect(boosted, 9);
+    });
+
     test('작은 변형 도형이 섞여 나온다', () {
       final controller = _controllerFor(
         RunPresets.raidCheckpoints.firstWhere((c) => c.id == 'raid_1'),
@@ -419,7 +439,7 @@ void main() {
   });
 
   group('클리어 이펙트', () {
-    test('콤보 클리어 시 파티클·버스트·점수 팝업이 생성된다', () {
+    test('제거된 도형마다 파티클 또는 반짝임 중 하나가 재생된다', () {
       final controller = _controllerFor(RunPresets.stage1);
       controller.shapes.addAll([
         _shape(['circle'], id: 1),
@@ -428,12 +448,76 @@ void main() {
 
       _draw(controller, 'circle');
 
-      expect(controller.particles.length,
-          GameController.particlesPerShape * 2);
+      // 두 도형 각각 파티클 또는 반짝임 하나씩.
+      final particleGroups =
+          controller.particles.length ~/ GameController.particlesPerShape;
+      expect(particleGroups + controller.sparkles.length, 2);
       expect(controller.bursts.length, 1, reason: '버스트는 콤보 마지막 도형에만');
+    });
+
+    test('반짝임은 지점마다 미니 도형 3개를 삼각형으로 배치한다', () {
+      // 반짝임이 한 번은 나오도록 여러 시드로 시도한다.
+      ShapeSparkle? sparkle;
+      for (int seed = 0; seed < 20 && sparkle == null; seed++) {
+        final controller = GameController(
+          runConfig: RunPresets.stage1,
+          random: math.Random(seed),
+        )..setFieldSize(const Size(400, 500));
+        controller.shapes.add(_shape(['circle']));
+        _draw(controller, 'circle');
+        if (controller.sparkles.isNotEmpty) sparkle = controller.sparkles.first;
+      }
+
+      expect(sparkle, isNotNull);
+      expect(sparkle!.clusters.length,
+          inInclusiveRange(GameController.sparkleMinClusters,
+              GameController.sparkleMaxClusters));
+      for (final cluster in sparkle.clusters) {
+        expect(cluster.length, GameController.sparklePerCluster);
+      }
+      // 0.1초 간격으로 켜졌다 꺼지길 3번 = 0.6초.
+      expect(sparkle.blinkInterval, const Duration(milliseconds: 100));
+      expect(sparkle.duration, const Duration(milliseconds: 600));
+      expect(sparkle.isVisible, isTrue);
+      sparkle.advance(const Duration(milliseconds: 100));
+      expect(sparkle.isVisible, isFalse, reason: '0.1초 뒤에는 꺼진다');
+    });
+
+    test('콤보는 도형별 개별 팝업 + 보너스 팝업 하나로 표시된다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1),
+        _shape(['circle'], id: 2, y: 150),
+        _shape(['circle'], id: 3, y: 200),
+      ]);
+
+      _draw(controller, 'circle');
+
+      final combo =
+          controller.scorePopups.where((p) => p.label == 'COMBO').toList();
+      final individual =
+          controller.scorePopups.where((p) => p.label == null).toList();
+
+      expect(individual.length, 3, reason: '도형마다 개별 팝업');
+      expect(combo.length, 1, reason: '콤보 보너스 팝업은 하나');
+
+      final perShape = individual.first.score;
+      expect(individual.every((p) => p.score == perShape), isTrue);
+      expect(combo.single.score,
+          GameController.comboBonusFor(perShape, 3));
+      // 표시된 팝업 합계가 실제 획득 점수와 일치한다.
+      expect(perShape * 3 + combo.single.score, controller.score);
+    });
+
+    test('단일 클리어에는 콤보 팝업이 붙지 않는다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.add(_shape(['circle']));
+
+      _draw(controller, 'circle');
+
       expect(controller.scorePopups.length, 1);
-      // 콤보면 합산 점수가 한 번에 표시된다.
-      expect(controller.scorePopups.single.score, controller.score);
+      expect(controller.scorePopups.single.label, isNull);
+      expect(GameController.comboBonusFor(10, 1), 0);
     });
 
     test('레이어만 벗겨진 경우 파티클/버스트 없이 점수 팝업만 뜬다', () {
@@ -453,10 +537,12 @@ void main() {
       controller.shapes.add(_shape(['circle']));
       _draw(controller, 'circle');
 
-      expect(controller.particles, isNotEmpty);
+      expect(controller.particles.isNotEmpty || controller.sparkles.isNotEmpty,
+          isTrue);
       controller.update(GameController.scorePopupDuration);
 
       expect(controller.particles, isEmpty);
+      expect(controller.sparkles, isEmpty);
       expect(controller.bursts, isEmpty);
       expect(controller.scorePopups, isEmpty);
     });
@@ -470,6 +556,99 @@ void main() {
       final startY = popup.y;
       controller.update(const Duration(milliseconds: 300));
       expect(popup.y, lessThan(startY));
+    });
+  });
+
+  group('전체 레이어 제거 스킬', () {
+    /// 게이지를 가득 채운다(도형 처치 누적).
+    GameController chargedController() {
+      final controller = _controllerFor(RunPresets.stage1);
+      final needed = (1 / GameController.layerBreakGainPerClear).ceil();
+      for (int i = 0; i < needed; i++) {
+        controller.shapes.add(_shape(['circle'], id: 1000 + i));
+        _draw(controller, 'circle');
+        controller.update(const Duration(milliseconds: 200));
+      }
+      return controller;
+    }
+
+    test('게이지는 더블클리어 게이지와 독립적으로 찬다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.add(_shape(['circle']));
+      _draw(controller, 'circle');
+
+      expect(controller.layerBreakGauge,
+          closeTo(GameController.layerBreakGainPerClear, 1e-9));
+      expect(controller.comboGauge,
+          closeTo(GameController.gaugeGainPerClear, 1e-9));
+      expect(controller.layerBreakGauge, isNot(controller.comboGauge));
+    });
+
+    test('게이지가 안 차면 발동되지 않는다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.add(_shape(['circle', 'circle'], id: 1));
+      expect(controller.isLayerBreakReady, isFalse);
+
+      controller.activateLayerBreak();
+      expect(controller.shapes.single.clearedLayers, 0);
+    });
+
+    test('화면에 도형이 없으면 비활성 상태를 유지한다', () {
+      final controller = chargedController();
+      controller.update(const Duration(milliseconds: 200));
+      controller.shapes.clear();
+
+      expect(controller.layerBreakGauge, 1.0);
+      expect(controller.isLayerBreakReady, isFalse);
+    });
+
+    test('모든 도형의 레이어를 한 겹씩 벗긴다', () {
+      final controller = chargedController();
+      controller.update(const Duration(milliseconds: 200));
+      controller.shapes.clear();
+
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1), // 1층: 완전히 클리어
+        _shape(['square', 'triangle'], id: 2), // 2층: 바깥만 벗겨짐
+        _shape(['circle', 'square', 'triangle'], id: 3),
+      ]);
+      expect(controller.isLayerBreakReady, isTrue);
+
+      controller.activateLayerBreak();
+
+      final one = controller.shapes.firstWhere((s) => s.id == 1);
+      final two = controller.shapes.firstWhere((s) => s.id == 2);
+      final three = controller.shapes.firstWhere((s) => s.id == 3);
+
+      expect(one.isCleared, isTrue, reason: '1층 도형은 한 겹으로 완전 클리어');
+      expect(two.clearedLayers, 1);
+      expect(two.isCleared, isFalse);
+      expect(two.activeName, 'square', reason: '다음 레이어가 노출된다');
+      expect(three.clearedLayers, 1);
+      expect(three.activeName, 'square');
+
+      expect(controller.layerBreakGauge, 0, reason: '발동하면 게이지를 모두 쓴다');
+    });
+
+    test('보스 도형도 대상에 포함된다', () {
+      final controller = chargedController();
+      controller.update(const Duration(milliseconds: 200));
+      controller.shapes.clear();
+      controller.setFieldSize(const Size(400, 500));
+
+      final boss = FallingShape(
+        id: 99,
+        layers: List.filled(GameController.bossLayers, 'circle'),
+        x: 200,
+        y: 100,
+        size: 240,
+        color: Colors.purple,
+        isBoss: true,
+      );
+      controller.shapes.add(boss);
+
+      controller.activateLayerBreak();
+      expect(boss.clearedLayers, 1);
     });
   });
 

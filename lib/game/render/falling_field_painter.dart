@@ -14,6 +14,7 @@ class FallingFieldPainter extends CustomPainter {
     required this.background,
     required this.bursts,
     required this.particles,
+    required this.sparkles,
     required this.scorePopups,
     required this.burstMaxScale,
   });
@@ -22,6 +23,7 @@ class FallingFieldPainter extends CustomPainter {
   final Color background;
   final List<ShapeBurst> bursts;
   final List<ShapeParticle> particles;
+  final List<ShapeSparkle> sparkles;
   final List<ScorePopup> scorePopups;
   final double burstMaxScale;
 
@@ -30,6 +32,7 @@ class FallingFieldPainter extends CustomPainter {
     _paintShapes(canvas);
     _paintBursts(canvas);
     _paintParticles(canvas);
+    _paintSparkles(canvas);
     _paintScorePopups(canvas);
   }
 
@@ -101,16 +104,43 @@ class FallingFieldPainter extends CustomPainter {
     }
   }
 
+  /// 도형 주변 여러 지점에서 미니 도형들이 폭죽처럼 깜빡인다.
+  void _paintSparkles(Canvas canvas) {
+    if (sparkles.isEmpty) return;
+    final paint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = Colors.white;
+
+    for (final sparkle in sparkles) {
+      if (!sparkle.isVisible) continue;
+      for (final cluster in sparkle.clusters) {
+        for (final point in cluster) {
+          canvas.drawPath(
+            buildShapePath(
+              sparkle.shapeName,
+              point.x,
+              point.y,
+              sparkle.miniSize,
+            ),
+            paint,
+          );
+        }
+      }
+    }
+  }
+
   /// 획득 점수가 위로 떠오르며 사라진다.
   void _paintScorePopups(Canvas canvas) {
     for (final popup in scorePopups) {
       final t = popup.progress;
+      final isCombo = popup.label != null;
       final painter = TextPainter(
         text: TextSpan(
-          text: '+${popup.score}',
+          text: isCombo ? '+${popup.score} ${popup.label}' : '+${popup.score}',
           style: TextStyle(
-            color: Colors.white.withValues(alpha: (1 - t).clamp(0.0, 1.0)),
-            fontSize: 20,
+            color: (isCombo ? Colors.amberAccent : Colors.white)
+                .withValues(alpha: (1 - t).clamp(0.0, 1.0)),
+            fontSize: isCombo ? 24 : 20,
             fontWeight: FontWeight.bold,
           ),
         ),

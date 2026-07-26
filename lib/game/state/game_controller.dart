@@ -94,6 +94,32 @@ class GameController extends ChangeNotifier {
   static const Duration scorePopupDuration = Duration(milliseconds: 700);
   static const double scorePopupRise = 46;
 
+  /// 크러쉬형 반짝임: 도형 주변에 만들 지점 수(최소~최대).
+  static const int sparkleMinClusters = 3;
+  static const int sparkleMaxClusters = 4;
+
+  /// 각 지점에 배치되는 미니 도형 수(가상 삼각형 꼭짓점).
+  static const int sparklePerCluster = 3;
+
+  /// 지점이 흩어지는 반경(도형 크기 대비).
+  static const double sparkleSpreadFactor = 0.75;
+
+  /// 가상 삼각형의 반지름(도형 크기 대비).
+  static const double sparkleTriangleRadiusFactor = 0.16;
+
+  /// 미니 도형 크기(도형 크기 대비).
+  static const double sparkleMiniSizeFactor = 0.13;
+
+  /// 켜짐/꺼짐 전환 간격. 3번 깜빡이므로 수명은 이 값의 6배.
+  static const Duration sparkleBlinkInterval = Duration(milliseconds: 100);
+  static const int sparkleBlinkCount = 3;
+
+  // ---------------- 전체 레이어 제거 스킬 ----------------
+
+  /// 도형을 하나 처치할 때마다 차는 레이어 제거 게이지 양.
+  /// 더블클리어 게이지와는 완전히 독립적이다.
+  static const double layerBreakGainPerClear = 0.1;
+
   /// 레이어 하나를 깰 때마다 차는 콤보 게이지 양.
   static const double gaugeGainPerClear = 0.12;
 
@@ -121,6 +147,7 @@ class GameController extends ChangeNotifier {
   /// 클리어 연출. 렌더링만을 위한 상태로, 게임 규칙에는 영향을 주지 않는다.
   final List<ShapeBurst> bursts = [];
   final List<ShapeParticle> particles = [];
+  final List<ShapeSparkle> sparkles = [];
   final List<ScorePopup> scorePopups = [];
 
   GameStatus get status => _status;
@@ -160,6 +187,13 @@ class GameController extends ChangeNotifier {
   /// 토글로 켜진 상태인지. 게이지가 바닥나면 자동으로 꺼진다.
   bool get isSkillActive => _skillOn && _comboGauge > 0;
 
+  /// 0~1 전체 레이어 제거 게이지. 더블클리어 게이지와 독립적이다.
+  double get layerBreakGauge => _layerBreakGauge;
+
+  /// 게이지가 가득 찼고 벗겨낼 도형이 화면에 있을 때만 발동할 수 있다.
+  bool get isLayerBreakReady =>
+      _layerBreakGauge >= 1 && shapes.any((s) => s.isActionable);
+
   Size get fieldSize => _fieldSize;
 
   // ---------------- 내부 상태 ----------------
@@ -187,6 +221,7 @@ class GameController extends ChangeNotifier {
   double _damageFlash = 0;
   double _comboGauge = 0;
   bool _skillOn = false;
+  double _layerBreakGauge = 0;
 
   /// 쌍둥이 보스를 이미 내보냈는지. 재소환 방지와 클리어 판정에 쓴다.
   bool _twinBossesSpawned = false;
@@ -285,11 +320,12 @@ class GameController extends ChangeNotifier {
     final affected = _clearMatching(target.activeName);
     if (affected.isEmpty) return;
 
-    final gained = _doubleClearScore * affected.length;
-    _score += gained;
+    final comboBonus = comboBonusFor(_doubleClearScore, affected.length);
+    _score += _doubleClearScore * affected.length + comboBonus;
     _comboGauge =
         math.min(1.0, _comboGauge + gaugeGainPerClear * affected.length);
-    _spawnClearEffects(affected, gained);
+    _addLayerBreakCharge(affected);
+    _spawnClearEffects(affected, _doubleClearScore, comboBonus);
     HapticFeedback.lightImpact();
     SystemSound.play(SystemSoundType.click);
   }
@@ -328,12 +364,18 @@ class GameController extends ChangeNotifier {
 
     final aliveCount = shapes.where((s) => !s.isBoss && !s.isCleared).length;
     if (_sinceLastSpawn.inMilliseconds < params.spawnIntervalMs) return;
-    if (aliveCount >= params.maxSimultaneousShapes) return;
+    if (aliveCount >= effectiveMaxSimultaneousShapes(params)) return;
     _sinceLastSpawn = Duration.zero;
     shapes.add(_createShape(forceMultiLayer: bossFight));
   }
 
   bool get _hasLivingBoss => shapes.any((s) => s.isBoss && !s.isCleared);
+
+  /// 난이도 표의 동시 등장 상한에 런 설정의 배율을 적용한 값.
+  int effectiveMaxSimultaneousShapes(DifficultyParams params) {
+    return (params.maxSimultaneousShapes * runConfig.simultaneousShapesScale)
+        .round();
+  }
 
   /// 보스는 지정 난이도 이상에서, 화면에 하나도 없을 때만 등장한다.
   void _trySpawnBoss(Duration dt) {
@@ -556,11 +598,13 @@ class GameController extends ChangeNotifier {
     }
 
     if (affected.isNotEmpty) {
-      final gained = result.score.round() * affected.length;
-      _score += gained;
+      final perShape = result.score.round();
+      final comboBonus = comboBonusFor(perShape, affected.length);
+      _score += perShape * affected.length + comboBonus;
       _comboGauge =
           math.min(1.0, _comboGauge + gaugeGainPerClear * affected.length);
-      _spawnClearEffects(affected, gained);
+      _addLayerBreakCharge(affected);
+      _spawnClearEffects(affected, perShape, comboBonus);
       _strokeFeedback = StrokeFeedback.hit;
       _lastMissScore = null;
       _lastMissThreshold = null;
@@ -591,15 +635,38 @@ class GameController extends ChangeNotifier {
     return affected;
   }
 
+  /// 동시 클리어 보너스 점수.
+  ///
+  /// 주의: 이전 버전에는 콤보 보너스 항목 자체가 없었고 총점이
+  /// (도형당 점수 × 개수)였다. 콤보 팝업을 별도로 띄우려면 보너스가
+  /// 실재해야 해서 여기서 처음 정의한다. 2개 이상 동시 클리어 시
+  /// 기본 획득분과 같은 양을 보너스로 더한다.
+  static int comboBonusFor(int perShapeScore, int clearedCount) {
+    if (clearedCount < 2) return 0;
+    return perShapeScore * clearedCount;
+  }
+
   /// 콤보 하나에 대한 연출을 만든다.
-  /// - 완전히 사라진 도형마다 파티클
+  /// - 완전히 사라진 도형마다 파티클 또는 반짝임(둘 중 무작위)
   /// - 콤보의 마지막 도형에 흰색 버스트
-  /// - 마지막 도형 위치에 합산 점수 팝업
-  void _spawnClearEffects(List<FallingShape> affected, int gainedScore) {
+  /// - 도형마다 개별 점수 팝업, 콤보면 보너스 팝업을 하나 더
+  void _spawnClearEffects(
+    List<FallingShape> affected,
+    int perShapeScore,
+    int comboBonus,
+  ) {
     if (affected.isEmpty) return;
 
     for (final shape in affected) {
-      if (shape.isCleared) _spawnParticles(shape);
+      if (shape.isCleared) _spawnDestroyEffect(shape);
+      // 각 도형 위치에서 개별 점수가 떠오른다.
+      scorePopups.add(ScorePopup(
+        startX: shape.x,
+        startY: shape.y,
+        score: perShapeScore,
+        riseDistance: scorePopupRise,
+        duration: scorePopupDuration,
+      ));
     }
 
     final last = affected.last;
@@ -613,12 +680,65 @@ class GameController extends ChangeNotifier {
       ));
     }
 
-    scorePopups.add(ScorePopup(
-      startX: last.x,
-      startY: last.y,
-      score: gainedScore,
-      riseDistance: scorePopupRise,
-      duration: scorePopupDuration,
+    if (comboBonus > 0) {
+      // 콤보 보너스는 마지막 도형 위치에 한 번만 강조해서 띄운다.
+      scorePopups.add(ScorePopup(
+        startX: last.x,
+        startY: last.y - scorePopupRise * 0.6,
+        score: comboBonus,
+        label: 'COMBO',
+        riseDistance: scorePopupRise * 1.4,
+        duration: scorePopupDuration,
+      ));
+    }
+  }
+
+  /// 도형이 완전히 사라질 때의 연출. 파티클과 크러쉬형 반짝임 중
+  /// 하나를 무작위로 골라 재생한다.
+  void _spawnDestroyEffect(FallingShape shape) {
+    if (_random.nextBool()) {
+      _spawnParticles(shape);
+    } else {
+      _spawnSparkle(shape);
+    }
+  }
+
+  /// 도형 반경 주변 3~4개 지점에, 각 지점마다 미니 도형 3개를 가상
+  /// 삼각형 꼭짓점 위치로 배치한다.
+  void _spawnSparkle(FallingShape shape) {
+    final clusterCount = sparkleMinClusters +
+        _random.nextInt(sparkleMaxClusters - sparkleMinClusters + 1);
+    final spread = shape.size * sparkleSpreadFactor;
+    final triangleRadius = shape.size * sparkleTriangleRadiusFactor;
+
+    final clusters = <List<SparklePoint>>[];
+    for (int c = 0; c < clusterCount; c++) {
+      // 도형 주변 무작위 위치.
+      final angle = _random.nextDouble() * 2 * math.pi;
+      final distance = spread * (0.35 + _random.nextDouble() * 0.65);
+      final cx = shape.x + math.cos(angle) * distance;
+      final cy = shape.y + math.sin(angle) * distance;
+
+      // 가상 삼각형의 세 꼭짓점.
+      final rotation = _random.nextDouble() * 2 * math.pi;
+      clusters.add([
+        for (int v = 0; v < sparklePerCluster; v++)
+          SparklePoint(
+            cx + math.cos(rotation + 2 * math.pi * v / sparklePerCluster) *
+                triangleRadius,
+            cy + math.sin(rotation + 2 * math.pi * v / sparklePerCluster) *
+                triangleRadius,
+          ),
+      ]);
+    }
+
+    sparkles.add(ShapeSparkle(
+      shapeName: shape.layers.first,
+      miniSize: shape.size * sparkleMiniSizeFactor,
+      clusters: clusters,
+      blinkInterval: sparkleBlinkInterval,
+      // 켜짐/꺼짐 한 쌍이 한 번의 깜빡임이므로 2배.
+      duration: sparkleBlinkInterval * (sparkleBlinkCount * 2),
     ));
   }
 
@@ -649,11 +769,15 @@ class GameController extends ChangeNotifier {
     for (final p in particles) {
       p.advance(dt);
     }
+    for (final s in sparkles) {
+      s.advance(dt);
+    }
     for (final s in scorePopups) {
       s.advance(dt);
     }
     bursts.removeWhere((e) => e.isDone);
     particles.removeWhere((e) => e.isDone);
+    sparkles.removeWhere((e) => e.isDone);
     scorePopups.removeWhere((e) => e.isDone);
   }
 
@@ -665,6 +789,46 @@ class GameController extends ChangeNotifier {
       if (best == null || shape.y > best.y) best = shape;
     }
     return best;
+  }
+
+  /// 도형을 처치한 만큼 레이어 제거 게이지를 채운다.
+  /// 레이어만 벗겨진 경우는 제외하고 완전히 사라진 도형만 센다.
+  void _addLayerBreakCharge(List<FallingShape> affected) {
+    final destroyed = affected.where((s) => s.isCleared).length;
+    if (destroyed == 0) return;
+    _layerBreakGauge =
+        math.min(1.0, _layerBreakGauge + layerBreakGainPerClear * destroyed);
+    // 0.1씩 열 번 더해도 부동소수점 오차로 1.0에 살짝 못 미친다.
+    // 그러면 게이지가 영영 가득 차지 않으므로 근접하면 딱 맞춰준다.
+    if (_layerBreakGauge > 1 - 1e-9) _layerBreakGauge = 1;
+  }
+
+  /// 전체 레이어 제거 스킬. 화면의 모든 도형에서 현재 바깥 레이어를
+  /// 한 겹씩 벗긴다. 1층 도형은 그대로 클리어되고, 다층·보스 도형은
+  /// 다음 레이어가 노출된다.
+  void activateLayerBreak() {
+    if (!isLayerBreakReady) return;
+
+    final affected = <FallingShape>[];
+    for (final shape in shapes) {
+      if (!shape.isActionable) continue;
+      shape.clearedLayers++;
+      shape.flashRemaining = clearFlashDuration;
+      affected.add(shape);
+    }
+    if (affected.isEmpty) return;
+
+    _layerBreakGauge = 0;
+
+    // 점수는 현재 난이도의 통과 기준을 획득 점수로 삼는다.
+    final perShape = currentThreshold.round();
+    final comboBonus = comboBonusFor(perShape, affected.length);
+    _score += perShape * affected.length + comboBonus;
+    _spawnClearEffects(affected, perShape, comboBonus);
+
+    HapticFeedback.mediumImpact();
+    SystemSound.play(SystemSoundType.click);
+    notifyListeners();
   }
 
   /// 스킬을 켜고 끈다. 게이지가 최소치에 못 미치면 켤 수 없다.
@@ -683,6 +847,7 @@ class GameController extends ChangeNotifier {
     strokePoints.clear();
     bursts.clear();
     particles.clear();
+    sparkles.clear();
     scorePopups.clear();
     _status = GameStatus.playing;
     _score = 0;
@@ -698,6 +863,7 @@ class GameController extends ChangeNotifier {
     _damageFlash = 0;
     _comboGauge = 0;
     _skillOn = false;
+    _layerBreakGauge = 0;
     _twinBossesSpawned = false;
     _twinBossReinforced = false;
     _lastRecognition = null;

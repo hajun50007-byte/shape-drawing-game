@@ -82,6 +82,7 @@ class _GameScreenState extends State<GameScreen>
                                 background: theme.background,
                                 bursts: _controller.bursts,
                                 particles: _controller.particles,
+                                sparkles: _controller.sparkles,
                                 scorePopups: _controller.scorePopups,
                                 burstMaxScale: GameController.burstMaxScale,
                               ),
@@ -124,11 +125,28 @@ class _GameScreenState extends State<GameScreen>
                   Positioned(
                     right: 16,
                     bottom: padHeight + 16,
-                    child: SkillButton(
-                      gauge: _controller.comboGauge,
-                      isReady: _controller.isSkillReady,
-                      isActive: _controller.isSkillActive,
-                      onToggle: _controller.toggleSkill,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        SkillButton(
+                          label: '레이어',
+                          gauge: _controller.layerBreakGauge,
+                          isReady: _controller.isLayerBreakReady,
+                          onPressed: _controller.activateLayerBreak,
+                          accent: Colors.cyan,
+                          activeAccent: Colors.cyanAccent,
+                        ),
+                        const SizedBox(height: 12),
+                        SkillButton(
+                          label: '2배',
+                          activeLabel: '2배 ON',
+                          gauge: _controller.comboGauge,
+                          isReady: _controller.isSkillReady,
+                          isActive: _controller.isSkillActive,
+                          onPressed: _controller.toggleSkill,
+                        ),
+                      ],
                     ),
                   ),
                   Positioned(

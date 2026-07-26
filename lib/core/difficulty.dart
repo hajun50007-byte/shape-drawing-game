@@ -203,6 +203,10 @@ class RunConfig {
   /// 보스 등장 형태. [bossFromDifficulty]가 null이면 의미 없다.
   final BossKind bossKind;
 
+  /// 동시 등장 최대 개수에 곱해지는 배율. 1.0이면 난이도 표의 기본값
+  /// 그대로다. 후반 체크포인트를 더 빡세게 만들 때 올린다.
+  final double simultaneousShapesScale;
+
   /// 구간 테마. null이면 minDifficulty로부터 자동 선택한다.
   final StageTheme? theme;
 
@@ -216,6 +220,7 @@ class RunConfig {
     this.multiLayerChance = 0,
     this.bossFromDifficulty,
     this.bossKind = BossKind.single,
+    this.simultaneousShapesScale = 1.0,
     this.isRaidMode = false,
     this.theme,
   });
@@ -359,6 +364,8 @@ class RunPresets {
         maxLayers: 2,
         multiLayerChance: 0.4,
         bossFromDifficulty: raidBossDifficulty,
+        // 체크포인트 7부터는 동시 등장 상한을 1.5배로 올려 압박을 준다.
+        simultaneousShapesScale: 1.5,
         theme: StageTheme.accelerationLine),
   ];
 }
