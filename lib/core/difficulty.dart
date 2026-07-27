@@ -178,6 +178,9 @@ enum BossKind {
 
   /// 조금 작은 보스 둘이 화면 좌우에서 동시에 내려온다.
   twin,
+
+  /// 단일 보스와 쌍둥이 보스가 번갈아 등장한다(레이드 후반 체크포인트).
+  alternating,
 }
 
 /// 스테이지 모드와 레이드 모드가 공유하는 실행 설정.
@@ -293,8 +296,8 @@ class RunPresets {
       stageNumber: stage,
       minDifficulty: stage.toDouble(),
       maxDifficulty: stage + 2.0,
-      // 쌍둥이 보스전은 시간 제한 없이 두 보스를 모두 잡아야 끝난다.
-      duration: isTwinBoss ? null : stageDuration,
+      // 보스 스테이지도 다른 단계와 같은 제한 시간을 갖는다.
+      duration: stageDuration,
       startLives: startLives,
       maxLayers: hasMultiLayer ? 2 : 1,
       multiLayerChance:
@@ -385,6 +388,20 @@ class RunPresets {
         multiLayerChance: 0.4,
         bossFromDifficulty: raidBossDifficulty,
         // 체크포인트 7부터는 동시 등장 상한을 2배로 올려 압박을 준다.
+        simultaneousShapesScale: 2.0,
+        theme: StageTheme.accelerationLine),
+    RunConfig(
+        id: 'raid_10',
+        minDifficulty: 10,
+        maxDifficulty: 10,
+        duration: null,
+        startLives: startLives,
+        isRaidMode: true,
+        maxLayers: 2,
+        multiLayerChance: 0.45,
+        bossFromDifficulty: 10,
+        // 단일 보스와 쌍둥이 보스가 번갈아 나온다.
+        bossKind: BossKind.alternating,
         simultaneousShapesScale: 2.0,
         theme: StageTheme.accelerationLine),
   ];

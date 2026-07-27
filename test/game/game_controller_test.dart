@@ -7,10 +7,13 @@ import 'package:shape_drawing_game/core/boss_traits.dart';
 import 'package:shape_drawing_game/core/difficulty.dart';
 import 'package:shape_drawing_game/core/shape_templates.dart';
 import 'package:shape_drawing_game/core/stage_theme.dart';
+import 'package:shape_drawing_game/game/model/active_skill.dart';
 import 'package:shape_drawing_game/game/model/clear_effect.dart';
 import 'package:shape_drawing_game/game/model/equipped_skills.dart';
 import 'package:shape_drawing_game/game/model/falling_shape.dart';
+import 'package:shape_drawing_game/game/model/skill_ring.dart';
 import 'package:shape_drawing_game/game/render/skill_frame_overlay.dart';
+import 'package:shape_drawing_game/game/render/skill_visuals.dart';
 import 'package:shape_drawing_game/game/state/game_controller.dart';
 import 'package:shape_drawing_game/game/state/unlock_state.dart';
 
@@ -24,6 +27,36 @@ GameController _controllerFor(
     equipped: equipped,
   );
   controller.setFieldSize(const Size(400, 500));
+  return controller;
+}
+
+/// 보스 등장 유예 시간(25초)을 넘겨 보스가 나오게 한다.
+///
+/// 그 사이 일반 도형을 놓치면 게임 오버가 되어 보스가 영영 안 나오므로,
+/// 매 스텝 일반 도형을 치워 "플레이어가 다 처리한" 상황을 흉내낸다.
+void _advanceToBoss(GameController controller) {
+  while (controller.runElapsed < GameController.bossSpawnDelay) {
+    controller.update(const Duration(milliseconds: 100));
+    controller.shapes.removeWhere((s) => !s.isBoss);
+  }
+  controller.update(const Duration(milliseconds: 16));
+}
+
+/// 더블클리어 게이지를 가득 채운다(토글 후에도 한동안 유지되도록).
+/// 한 번에 여러 개를 클리어해 게이지를 1.0까지 올린다.
+void _fillComboGauge(GameController controller) {
+  final needed = (1 / GameController.gaugeGainPerClear).ceil();
+  controller.shapes.addAll([
+    for (int i = 0; i < needed; i++) _shape(['circle'], id: 9000 + i),
+  ]);
+  _draw(controller, 'circle');
+  controller.shapes.clear();
+}
+
+/// 보스가 등장한 상태의 컨트롤러를 만든다.
+GameController _controllerWithBoss(RunConfig config) {
+  final controller = _controllerFor(config);
+  _advanceToBoss(controller);
   return controller;
 }
 
@@ -246,8 +279,7 @@ void main() {
 
   group('보스', () {
     test('난이도 5 스테이지에서 등장하며 크고 중앙에서 내려온다', () {
-      final controller = _controllerFor(RunPresets.stage5);
-      controller.update(const Duration(milliseconds: 16));
+      final controller = _controllerWithBoss(RunPresets.stage5);
 
       final boss = controller.shapes.firstWhere((s) => s.isBoss);
       expect(boss.layers.length, GameController.bossLayers);
@@ -258,8 +290,7 @@ void main() {
     });
 
     test('등장 연출 중에는 판정 대상이 아니고 낙하하지 않는다', () {
-      final controller = _controllerFor(RunPresets.stage5);
-      controller.update(const Duration(milliseconds: 16));
+      final controller = _controllerWithBoss(RunPresets.stage5);
 
       final boss = controller.shapes.firstWhere((s) => s.isBoss);
       expect(boss.isIntroPlaying, isTrue);
@@ -278,7 +309,7 @@ void main() {
     });
 
     test('화면에 한 번에 하나만 존재한다', () {
-      final controller = _controllerFor(RunPresets.stage5);
+      final controller = _controllerWithBoss(RunPresets.stage5);
       for (int i = 0; i < 200; i++) {
         controller.update(const Duration(milliseconds: 50));
       }
@@ -286,8 +317,7 @@ void main() {
     });
 
     test('보스가 떠 있는 동안 일반 도형 스폰이 멈추고, 정리되면 재개된다', () {
-      final controller = _controllerFor(RunPresets.stage5);
-      controller.update(const Duration(milliseconds: 16));
+      final controller = _controllerWithBoss(RunPresets.stage5);
       final boss = controller.shapes.firstWhere((s) => s.isBoss);
 
       // 보스전 동안에는 일반 도형이 늘지 않는다.
@@ -305,8 +335,7 @@ void main() {
     });
 
     test('보스 낙하 속도는 난이도와 무관한 고정값이다', () {
-      final controller = _controllerFor(RunPresets.stage5);
-      controller.update(const Duration(milliseconds: 16));
+      final controller = _controllerWithBoss(RunPresets.stage5);
       final boss = controller.shapes.firstWhere((s) => s.isBoss);
 
       // 등장 연출을 끝낸다.
@@ -329,7 +358,7 @@ void main() {
   group('보스 스킬', () {
     GameController spawnedBoss(BossTraits traits) {
       final controller = _controllerFor(_bossConfigWith(traits));
-      controller.update(const Duration(milliseconds: 16)); // 스폰
+      _advanceToBoss(controller); // 유예 시간 통과 + 스폰
       controller.update(GameController.bossIntroDuration); // 등장 연출 종료
       return controller;
     }
@@ -373,7 +402,7 @@ void main() {
           runConfig: _bossConfigWith(BossTraits.standard),
           random: math.Random(seed),
         )..setFieldSize(const Size(400, 500));
-        controller.update(const Duration(milliseconds: 16));
+        _advanceToBoss(controller);
         controller.update(GameController.bossIntroDuration);
 
         final boss = controller.shapes.firstWhere((s) => s.isBoss);
@@ -482,6 +511,124 @@ void main() {
     });
   });
 
+  group('보스 등장 조건과 페널티', () {
+    test('보스 스테이지도 시작 직후에는 일반 도형만 나온다', () {
+      final controller = _controllerFor(RunPresets.stage5);
+
+      // 유예 시간 직전까지는 보스가 없다.
+      while (controller.runElapsed <
+          GameController.bossSpawnDelay - const Duration(seconds: 1)) {
+        controller.update(const Duration(milliseconds: 100));
+        controller.shapes.removeWhere((s) => !s.isBoss);
+      }
+      expect(controller.shapes.any((s) => s.isBoss), isFalse,
+          reason: '25초 전에는 보스가 나오면 안 된다');
+      expect(GameController.bossSpawnDelay, const Duration(seconds: 25));
+
+      // 유예 시간이 지나면 등장한다.
+      _advanceToBoss(controller);
+      expect(controller.shapes.any((s) => s.isBoss), isTrue);
+    });
+
+    test('보스를 놓치면 라이프가 3 깎인다', () {
+      final controller = _controllerWithBoss(RunPresets.stage5);
+      controller.update(GameController.bossIntroDuration);
+
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+      final livesBefore = controller.lives;
+
+      // 보스를 화면 아래로 보낸다.
+      boss.y = 10000;
+      controller.update(const Duration(milliseconds: 16));
+
+      expect(controller.lives, livesBefore - GameController.bossLifeCost);
+      expect(GameController.bossLifeCost, 3);
+    });
+
+    test('일반 도형을 놓치면 라이프가 1만 깎인다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.add(_shape(['circle'], y: 10000));
+      final livesBefore = controller.lives;
+
+      controller.update(const Duration(milliseconds: 16));
+      expect(controller.lives, livesBefore - 1);
+    });
+
+    test('쌍둥이 보스는 스킬을 쓰지 않는다', () {
+      final controller = _controllerWithBoss(RunPresets.stage10);
+      controller.update(GameController.bossIntroDuration);
+
+      final twins = controller.shapes.where((s) => s.isBoss).toList();
+      expect(twins.length, 2);
+      for (final twin in twins) {
+        expect(twin.assignedSkill, isNull);
+        expect(twin.canUseSkill, isFalse);
+      }
+
+      // 시간이 흘러도 텔레그래프가 시작되지 않는다.
+      for (int i = 0; i < 60; i++) {
+        controller.update(const Duration(milliseconds: 200));
+      }
+      for (final twin in controller.shapes.where((s) => s.isBoss)) {
+        expect(twin.isTelegraphing, isFalse);
+      }
+    });
+
+    test('단일 보스는 스킬을 쓴다', () {
+      final controller = _controllerWithBoss(RunPresets.stage5);
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+      expect(boss.assignedSkill, isNotNull);
+      expect(boss.canUseSkill, isTrue);
+    });
+  });
+
+  group('레이드 10단계 체크포인트', () {
+    RunConfig raid10() =>
+        RunPresets.raidCheckpoints.firstWhere((c) => c.id == 'raid_10');
+
+    test('단일 보스와 쌍둥이 보스가 번갈아 등장한다', () {
+      expect(raid10().bossKind, BossKind.alternating);
+
+      final controller = _controllerWithBoss(raid10());
+      final kinds = <int>[];
+
+      for (int round = 0; round < 4; round++) {
+        final bosses = controller.shapes.where((s) => s.isBoss).toList();
+        expect(bosses, isNotEmpty, reason: '$round번째 보스 무리');
+        kinds.add(bosses.length);
+
+        // 잡아 없앤 뒤 다음 무리를 기다린다.
+        controller.shapes.removeWhere((s) => s.isBoss);
+        for (int i = 0; i < 400 && !controller.shapes.any((s) => s.isBoss); i++) {
+          controller.update(const Duration(milliseconds: 100));
+          controller.shapes.removeWhere((s) => !s.isBoss);
+        }
+      }
+
+      // 1마리(단일) -> 2마리(쌍둥이) -> 1마리 -> 2마리 순으로 번갈아 나온다.
+      expect(kinds, [1, 2, 1, 2]);
+    });
+
+    test('레이드에서는 쌍둥이를 다 잡아도 런이 끝나지 않는다', () {
+      final controller = _controllerWithBoss(raid10());
+      // 첫 무리(단일)를 없애고 쌍둥이가 나올 때까지 진행한다.
+      controller.shapes.removeWhere((s) => s.isBoss);
+      for (int i = 0; i < 400; i++) {
+        controller.update(const Duration(milliseconds: 100));
+        controller.shapes.removeWhere((s) => !s.isBoss);
+        if (controller.shapes.where((s) => s.isBoss).length == 2) break;
+      }
+      expect(controller.shapes.where((s) => s.isBoss).length, 2);
+
+      // 둘 다 제거해도 클리어되지 않는다(무한 진행 모드).
+      for (final boss in controller.shapes.where((s) => s.isBoss)) {
+        boss.clearedLayers = boss.layers.length;
+      }
+      controller.update(const Duration(milliseconds: 16));
+      expect(controller.status, GameStatus.playing);
+    });
+  });
+
   group('도형별 통과 기준 보정', () {
     test('사각형만 기본 기준보다 8점 낮다', () {
       for (final level in [1.0, 3.0, 5.0, 7.0]) {
@@ -517,8 +664,7 @@ void main() {
         RunPresets.raidCheckpoints.firstWhere((c) => c.id == 'raid_7');
 
     test('난이도 7부터 보스가 등장한다', () {
-      final controller = _controllerFor(raid7());
-      controller.update(const Duration(milliseconds: 16));
+      final controller = _controllerWithBoss(raid7());
       expect(controller.shapes.any((s) => s.isBoss), isTrue);
     });
 
@@ -536,8 +682,7 @@ void main() {
       expect(GameController.raidBossFallSpeed,
           greaterThan(GameController.bossFallSpeed));
 
-      final controller = _controllerFor(raid7());
-      controller.update(const Duration(milliseconds: 16));
+      final controller = _controllerWithBoss(raid7());
       final boss = controller.shapes.firstWhere((s) => s.isBoss);
       controller.update(GameController.bossIntroDuration);
 
@@ -547,8 +692,7 @@ void main() {
     });
 
     test('보스전 중에도 일반 스폰이 계속되며 2층 도형만 나온다', () {
-      final controller = _controllerFor(raid7());
-      controller.update(const Duration(milliseconds: 16));
+      final controller = _controllerWithBoss(raid7());
       expect(controller.shapes.any((s) => s.isBoss), isTrue);
 
       for (int i = 0; i < 200; i++) {
@@ -1010,7 +1154,7 @@ void main() {
       expect(UnlockState.instance.timeSlowUnlocked, isFalse);
 
       final controller = _controllerFor(_bossConfigWith(BossTraits.standard));
-      controller.update(const Duration(milliseconds: 16));
+      _advanceToBoss(controller);
       controller.update(GameController.bossIntroDuration); // 판정 가능해지도록
       final boss = controller.shapes.firstWhere((s) => s.isBoss);
       boss.clearedLayers = boss.layers.length - 1;
@@ -1022,8 +1166,7 @@ void main() {
     });
 
     test('5단계가 아닌 보스(쌍둥이)를 클리어해도 해금되지 않는다', () {
-      final controller = _controllerFor(RunPresets.stage10);
-      controller.update(const Duration(milliseconds: 16));
+      final controller = _controllerWithBoss(RunPresets.stage10);
       controller.update(GameController.bossIntroDuration); // 판정 가능해지도록
       final boss = controller.shapes.firstWhere((s) => s.isBoss);
       boss.clearedLayers = boss.layers.length - 1;
@@ -1097,11 +1240,7 @@ void main() {
     List<FallingShape> twinsOf(GameController c) =>
         c.shapes.where((s) => s.isBoss).toList();
 
-    GameController spawnedTwins() {
-      final controller = _controllerFor(RunPresets.stage10);
-      controller.update(const Duration(milliseconds: 16));
-      return controller;
-    }
+    GameController spawnedTwins() => _controllerWithBoss(RunPresets.stage10);
 
     test('7층짜리 둘이 좌우에서 동시에 등장한다', () {
       final controller = spawnedTwins();
@@ -1117,8 +1256,7 @@ void main() {
     });
 
     test('5단계 보스보다 작다', () {
-      final single = _controllerFor(RunPresets.stage5)
-        ..update(const Duration(milliseconds: 16));
+      final single = _controllerWithBoss(RunPresets.stage5);
       final twin = spawnedTwins();
 
       final singleSize = single.shapes.firstWhere((s) => s.isBoss).size;
@@ -1204,33 +1342,144 @@ void main() {
   });
 
   group('스킬 배경 연출', () {
-    test('스킬이 꺼져 있으면 연출도 없다', () {
+    /// 더블클리어 게이지를 채워 토글 가능한 상태로 만든다.
+    GameController readyController() {
+      final controller = _controllerFor(RunPresets.stage1);
+      _fillComboGauge(controller);
+      return controller;
+    }
+
+    test('스킬이 꺼져 있으면 링이 하나도 없다', () {
       final controller = _controllerFor(RunPresets.stage1);
       controller.update(const Duration(milliseconds: 16));
-      expect(controller.skillOverlay, isNull);
+      expect(controller.overlaySkills, isEmpty);
+      expect(controller.skillRings.hasVisibleRings, isFalse);
     });
 
-    test('더블클리어를 켜면 해당 연출이 뜨고 끄면 사라진다', () {
-      final controller = _controllerFor(RunPresets.stage1);
-      controller.shapes.addAll([
-        _shape(['circle'], id: 1),
-        _shape(['circle'], id: 2),
-        _shape(['circle'], id: 3),
-      ]);
-      _draw(controller, 'circle');
+    test('스킬 하나만 켜지면 전체 링을 가져간다', () {
+      final controller = readyController();
       controller.toggleSkill();
       controller.update(const Duration(milliseconds: 16));
 
-      expect(controller.skillOverlay, SkillOverlayKind.doubleClear);
+      expect(controller.overlaySkills, [ActiveSkill.doubleClear]);
+      for (final ring in controller.skillRings.rings) {
+        expect(ring.owner, ActiveSkill.doubleClear,
+            reason: '링 ${ring.index}');
+      }
+    });
+
+    test('끄면 외곽부터 순서대로 퇴장한다', () {
+      final controller = readyController();
+      controller.toggleSkill();
+      // 전부 나타날 때까지 기다린다(등장은 1.0s 스태거 + 0.3s 페이드).
+      controller.update(const Duration(milliseconds: 1400));
 
       controller.toggleSkill();
       controller.update(const Duration(milliseconds: 16));
-      expect(controller.skillOverlay, isNull);
+
+      // 주인은 즉시 사라지고 퇴장 애니메이션만 남는다.
+      expect(controller.overlaySkills, isEmpty);
+      expect(controller.skillRings.rings.every((r) => r.owner == null), isTrue);
+      expect(controller.skillRings.hasVisibleRings, isTrue,
+          reason: '퇴장 애니메이션이 재생 중이어야 한다');
+
+      // 바깥 링이 안쪽 링보다 먼저 옅어진다(0.1초 간격 순차 퇴장).
+      controller.update(const Duration(milliseconds: 150));
+      final outer = controller.skillRings.rings.first.visibleAnimations.first;
+      final inner = controller.skillRings.rings.last.visibleAnimations.first;
+      expect(outer.alpha, lessThan(inner.alpha));
+
+      // 충분히 지나면 전부 사라진다.
+      controller.update(const Duration(seconds: 3));
+      expect(controller.skillRings.hasVisibleRings, isFalse);
     });
 
-    test('레이어 제거는 즉시 발동형이라 1초만 표시된다', () {
+    test('빠르게 껐다 켜도 이전 퇴장 애니메이션이 끝까지 재생된다', () {
+      final controller = readyController();
+      controller.toggleSkill();
+      controller.update(const Duration(milliseconds: 1400));
+
+      controller.toggleSkill(); // 끄기 -> 퇴장 시작
+      controller.update(const Duration(milliseconds: 50));
+      controller.toggleSkill(); // 곧바로 다시 켜기 -> 등장 시작
+      controller.update(const Duration(milliseconds: 16));
+
+      final ring = controller.skillRings.rings.first;
+      // 퇴장은 남아서 계속 재생되고, 새 등장이 그 위에 얹힌다.
+      expect(ring.exiting, isNotEmpty, reason: '이전 퇴장이 잘리면 안 된다');
+      expect(ring.owner, ActiveSkill.doubleClear);
+      expect(ring.visibleAnimations.length, greaterThanOrEqualTo(1));
+    });
+
+    test('두 번째 스킬이 켜지면 홀수 번째 링을 가져간다', () {
+      final controller = readyController();
+      // 타임 슬로우도 쓸 수 있는 구성으로 다시 만든다.
+      const both = EquippedSkills(
+        doubleClear: true,
+        layerBreak: false,
+        timeSlow: true,
+      );
+      final c = _controllerFor(RunPresets.stage1, equipped: both);
+      _fillComboGauge(c);
+
+      c.toggleSkill(); // 더블클리어 먼저
+      c.update(const Duration(milliseconds: 1400));
+      expect(c.skillRings.rings.every((r) => r.owner == ActiveSkill.doubleClear),
+          isTrue);
+
+      // 타임 슬로우 게이지를 채우고 켠다.
+      final needed = (1 / GameController.timeSlowGainPerClear).ceil();
+      for (int i = 0; i < needed; i++) {
+        c.shapes.add(_shape(['circle'], id: 7000 + i));
+        _draw(c, 'circle');
+        c.update(const Duration(milliseconds: 200));
+      }
+      c.activateTimeSlow();
+      c.update(const Duration(milliseconds: 16));
+
+      // 1-based 홀수(= 0-based 짝수 인덱스)를 새 스킬이 가져간다.
+      for (final ring in c.skillRings.rings) {
+        final expected = ring.index.isEven
+            ? ActiveSkill.timeSlow
+            : ActiveSkill.doubleClear;
+        expect(ring.owner, expected, reason: '링 ${ring.index}');
+      }
+      expect(controller.overlaySkills, isEmpty); // 원래 컨트롤러는 영향 없음
+    });
+
+    test('한쪽이 꺼지면 남은 스킬이 비워진 링으로 재확장한다', () {
+      const both = EquippedSkills(
+        doubleClear: true,
+        layerBreak: false,
+        timeSlow: true,
+      );
+      final c = _controllerFor(RunPresets.stage1, equipped: both);
+      _fillComboGauge(c);
+      c.toggleSkill();
+      c.update(const Duration(milliseconds: 1400));
+
+      final needed = (1 / GameController.timeSlowGainPerClear).ceil();
+      for (int i = 0; i < needed; i++) {
+        c.shapes.add(_shape(['circle'], id: 7100 + i));
+        _draw(c, 'circle');
+        c.update(const Duration(milliseconds: 200));
+      }
+      c.shapes.clear();
+      c.activateTimeSlow();
+      c.update(const Duration(milliseconds: 16));
+
+      // 타임 슬로우가 끝나면 더블클리어가 전체 링을 되찾는다.
+      c.update(GameController.timeSlowDuration);
+      c.update(const Duration(milliseconds: 16));
+
+      expect(c.overlaySkills, [ActiveSkill.doubleClear]);
+      for (final ring in c.skillRings.rings) {
+        expect(ring.owner, ActiveSkill.doubleClear, reason: '링 ${ring.index}');
+      }
+    });
+
+    test('레이어 제거는 즉시 발동형이라 1초만 소유한다', () {
       final controller = _controllerFor(RunPresets.stage1);
-      // 레이어 제거 게이지를 채운다.
       final needed = (1 / GameController.layerBreakGainPerClear).ceil();
       for (int i = 0; i < needed; i++) {
         controller.shapes.add(_shape(['circle'], id: 4000 + i));
@@ -1243,47 +1492,53 @@ void main() {
 
       controller.activateLayerBreak();
       controller.update(const Duration(milliseconds: 16));
-      expect(controller.skillOverlay, SkillOverlayKind.layerBreak);
+      expect(controller.overlaySkills, [ActiveSkill.layerBreak]);
 
       controller.update(GameController.layerBreakOverlayDuration);
-      expect(controller.skillOverlay, isNull);
+      expect(controller.overlaySkills, isEmpty);
       expect(GameController.layerBreakOverlayDuration,
           const Duration(seconds: 1));
     });
 
-    test('연출이 이어지는 동안 경과 시간이 누적되고, 바뀌면 0부터 다시 센다', () {
-      final controller = _controllerFor(RunPresets.stage1);
-      controller.shapes.addAll([
-        _shape(['circle'], id: 1),
-        _shape(['circle'], id: 2),
-        _shape(['circle'], id: 3),
-      ]);
-      _draw(controller, 'circle');
-      controller.toggleSkill();
+    test('스킬마다 서로 대비되는 두 색이 정의되어 있다', () {
+      for (final skill in ActiveSkill.values) {
+        final palette = SkillVisuals.of(skill);
+        expect(palette.bright, isNot(equals(palette.dim)),
+            reason: '$skill는 번갈아 표시할 두 색이 달라야 한다');
 
-      controller.update(const Duration(milliseconds: 100));
-      expect(controller.skillOverlayElapsed, Duration.zero,
-          reason: '연출이 시작된 프레임에는 0');
-      controller.update(const Duration(milliseconds: 100));
-      expect(controller.skillOverlayElapsed,
-          const Duration(milliseconds: 100));
-    });
-
-    test('스킬마다 서로 다른 두 색이 정의되어 있다', () {
-      for (final kind in SkillOverlayKind.values) {
-        final colors = SkillFrameOverlay.palette[kind];
-        expect(colors, isNotNull, reason: '$kind 색이 없다');
-        expect(colors!.$1, isNot(equals(colors.$2)),
-            reason: '$kind는 번갈아 표시할 두 색이 달라야 한다');
+        // 명도 대비가 확실히 벌어져 있어야 한다.
+        final brightL = HSLColor.fromColor(palette.bright).lightness;
+        final dimL = HSLColor.fromColor(palette.dim).lightness;
+        expect((brightL - dimL).abs(), greaterThan(0.3), reason: '$skill 명도 대비');
       }
-      // 스킬끼리도 계열이 겹치지 않아야 한다.
-      final firsts =
-          SkillOverlayKind.values.map((k) => SkillFrameOverlay.palette[k]!.$1);
-      expect(firsts.toSet().length, SkillOverlayKind.values.length);
+      // 스킬끼리 대표색이 겹치지 않는다.
+      final accents = ActiveSkill.values.map((s) => SkillVisuals.of(s).accent);
+      expect(accents.toSet().length, ActiveSkill.values.length);
     });
 
-    test('가장 안쪽 프레임은 화면의 약 60%의 2% 크기다', () {
-      expect(SkillFrameOverlay.innermostScale, closeTo(0.6 * 0.02, 1e-9));
+    test('가장 안쪽 사각형은 화면의 약 60%의 10% 크기다', () {
+      expect(SkillFrameOverlay.innermostScale, closeTo(0.6 * 0.10, 1e-9));
+    });
+
+    test('안쪽으로 갈수록 인접 사각형 간격이 좁아진다', () {
+      double gapAt(int i) =>
+          ringScale(
+            index: i,
+            ringCount: SkillFrameOverlay.ringCount,
+            innermostScale: SkillFrameOverlay.innermostScale,
+            easeExponent: SkillFrameOverlay.easeExponent,
+          ) -
+          ringScale(
+            index: i + 1,
+            ringCount: SkillFrameOverlay.ringCount,
+            innermostScale: SkillFrameOverlay.innermostScale,
+            easeExponent: SkillFrameOverlay.easeExponent,
+          );
+
+      for (int i = 0; i < SkillFrameOverlay.ringCount - 2; i++) {
+        expect(gapAt(i), greaterThan(gapAt(i + 1)),
+            reason: '링 $i 간격이 다음 간격보다 넓어야 한다');
+      }
     });
   });
 
@@ -1384,11 +1639,16 @@ void main() {
     test('스테이지 보스는 난이도 5, 레이드 보스는 7부터 등장한다', () {
       expect(RunPresets.stage1.bossFromDifficulty, isNull);
       expect(RunPresets.stage5.bossFromDifficulty, 5);
+
       for (final raid in RunPresets.raidCheckpoints) {
-        expect(raid.bossFromDifficulty, RunPresets.raidBossDifficulty);
-        expect(raid.bossFromDifficulty, 7);
         expect(raid.isRaidMode, isTrue);
+        // 10단계 체크포인트는 자기 구간(10)부터, 나머지는 공통 기준(7)부터.
+        final expected =
+            raid.id == 'raid_10' ? 10.0 : RunPresets.raidBossDifficulty;
+        expect(raid.bossFromDifficulty, expected, reason: raid.id);
       }
+      expect(RunPresets.raidBossDifficulty, 7);
+
       // 스테이지 프리셋은 레이드 모드가 아니다(쌍둥이 보스 스테이지 포함).
       expect(RunPresets.stage10.isRaidMode, isFalse);
     });

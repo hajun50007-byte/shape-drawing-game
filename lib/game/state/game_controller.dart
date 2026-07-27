@@ -7,18 +7,17 @@ import '../../core/boss_traits.dart';
 import '../../core/difficulty.dart';
 import '../../core/gesture_recognizer.dart' as core;
 import '../../core/shape_templates.dart';
+import '../model/active_skill.dart';
 import '../model/clear_effect.dart';
 import '../model/equipped_skills.dart';
 import '../model/falling_shape.dart';
 import '../render/shape_palette.dart';
+import '../render/skill_frame_overlay.dart';
 import '../render/stroke_pad_painter.dart';
+import 'skill_rings.dart';
 import 'unlock_state.dart';
 
 enum GameStatus { playing, cleared, gameOver }
-
-/// 액티브 스킬이 켜져 있는 동안 배경에 깔리는 연출의 종류.
-/// 스킬별로 프레임 색이 다르다.
-enum SkillOverlayKind { doubleClear, layerBreak, timeSlow }
 
 /// 게임 한 판의 모든 상태와 규칙. 위젯/렌더링에 의존하지 않으며 매 프레임
 /// [update]로만 시간이 흐른다(내부에 dart:async 타이머를 두지 않는다).
@@ -81,6 +80,13 @@ class GameController extends ChangeNotifier {
 
   /// 보스 등장 연출 길이.
   static const Duration bossIntroDuration = Duration(milliseconds: 1200);
+
+  /// 보스 스테이지라도 시작하자마자 보스가 나오지는 않는다.
+  /// 이 시간까지는 일반 도형만 내려온다.
+  static const Duration bossSpawnDelay = Duration(seconds: 25);
+
+  /// 보스를 놓쳤을 때 깎이는 라이프. 일반 도형(1)보다 훨씬 아프다.
+  static const int bossLifeCost = 3;
 
   /// 보스를 처치한 뒤 다음 보스가 나오기까지의 간격.
   static const Duration bossCooldown = Duration(seconds: 8);
@@ -253,11 +259,11 @@ class GameController extends ChangeNotifier {
   /// 낙하 속도 감소가 적용 중인지.
   bool get isTimeSlowActive => _timeSlowRemaining > Duration.zero;
 
-  /// 지금 배경에 깔아야 할 스킬 연출. 없으면 null.
-  SkillOverlayKind? get skillOverlay => _overlayKind;
+  /// 배경 사각형 링들의 소유권·애니메이션 상태.
+  SkillRingsState get skillRings => _skillRings;
 
-  /// 현재 연출이 시작된 뒤 흐른 시간. 프레임 등장·색 전환 순서 계산에 쓴다.
-  Duration get skillOverlayElapsed => _overlayElapsed;
+  /// 지금 배경 연출을 소유한 스킬들(켜진 순서).
+  List<ActiveSkill> get overlaySkills => _skillRings.activeSkills;
 
   /// 라이프가 얼마 안 남아 배경을 붉게 물들여야 하는지.
   bool get isLowLife =>
@@ -297,8 +303,11 @@ class GameController extends ChangeNotifier {
   /// 즉시 발동형 레이어 제거의 연출 잔여 시간.
   Duration _layerBreakOverlayRemaining = Duration.zero;
 
-  SkillOverlayKind? _overlayKind;
-  Duration _overlayElapsed = Duration.zero;
+  final SkillRingsState _skillRings = SkillRingsState(
+    ringCount: SkillFrameOverlay.ringCount,
+    fadeDuration: SkillFrameOverlay.fadeDuration,
+    stagger: SkillFrameOverlay.stagger,
+  );
 
   /// 쌍둥이 보스를 이미 내보냈는지. 재소환 방지와 클리어 판정에 쓴다.
   bool _twinBossesSpawned = false;
@@ -311,6 +320,9 @@ class GameController extends ChangeNotifier {
   int _doubleClearScore = 0;
 
   Duration _bossCooldownRemaining = Duration.zero;
+
+  /// 지금까지 내보낸 보스 무리 수. alternating에서 순서를 정하는 데 쓴다.
+  int _bossSpawnCount = 0;
 
   Size _fieldSize = Size.zero;
 
@@ -452,8 +464,8 @@ class GameController extends ChangeNotifier {
     if (_timeSlowRemaining < Duration.zero) _timeSlowRemaining = Duration.zero;
   }
 
-  /// 지금 어떤 스킬 연출을 보여줄지 정하고, 같은 연출이 이어지는 동안
-  /// 경과 시간을 누적한다(프레임 등장·색 전환 순서에 쓰인다).
+  /// 켜져 있는 스킬 집합을 링 상태에 반영하고 애니메이션을 진행시킨다.
+  /// 링 소유권 규칙과 등장·퇴장 연출은 [SkillRingsState]가 담당한다.
   void _tickSkillOverlay(Duration dt) {
     if (_layerBreakOverlayRemaining > Duration.zero) {
       _layerBreakOverlayRemaining -= dt;
@@ -462,24 +474,15 @@ class GameController extends ChangeNotifier {
       }
     }
 
-    // 즉시 발동형이라 짧게 지나가는 레이어 제거를 가장 우선해서 보여준다.
-    final SkillOverlayKind? desired;
-    if (_layerBreakOverlayRemaining > Duration.zero) {
-      desired = SkillOverlayKind.layerBreak;
-    } else if (isTimeSlowActive) {
-      desired = SkillOverlayKind.timeSlow;
-    } else if (isSkillActive) {
-      desired = SkillOverlayKind.doubleClear;
-    } else {
-      desired = null;
-    }
+    final active = <ActiveSkill>{
+      // 레이어 제거는 즉시 발동형이라 정해진 시간 동안만 켜진 것으로 친다.
+      if (_layerBreakOverlayRemaining > Duration.zero) ActiveSkill.layerBreak,
+      if (isTimeSlowActive) ActiveSkill.timeSlow,
+      if (isSkillActive) ActiveSkill.doubleClear,
+    };
 
-    if (desired != _overlayKind) {
-      _overlayKind = desired;
-      _overlayElapsed = Duration.zero;
-    } else if (desired != null) {
-      _overlayElapsed += dt;
-    }
+    _skillRings.syncActiveSkills(active);
+    _skillRings.advance(dt);
   }
 
   /// 살아있는 보스마다 스킬 대기 -> 텔레그래프 -> 발동 사이클을 진행한다.
@@ -568,10 +571,13 @@ class GameController extends ChangeNotifier {
         .round();
   }
 
-  /// 보스는 지정 난이도 이상에서, 화면에 하나도 없을 때만 등장한다.
+  /// 보스는 지정 난이도 이상에서, 등장 유예 시간이 지난 뒤,
+  /// 화면에 하나도 없을 때만 등장한다.
   void _trySpawnBoss(Duration dt) {
     final bossFrom = runConfig.bossFromDifficulty;
     if (bossFrom == null || _difficultyLevel < bossFrom) return;
+    // 시작하자마자 보스가 나오지 않도록 초반은 일반 도형만 흘려보낸다.
+    if (_runElapsed < bossSpawnDelay) return;
 
     if (_hasLivingBoss) {
       // 레이드는 주기적으로 다시 등장하므로 더 긴 간격을 쓴다.
@@ -579,16 +585,17 @@ class GameController extends ChangeNotifier {
           runConfig.isRaidMode ? raidBossInterval : bossCooldown;
       return;
     }
-    // 쌍둥이 보스는 한 번만 등장한다(둘 다 잡으면 스테이지 클리어).
+    // 스테이지의 쌍둥이 보스는 한 번만 등장한다(둘 다 잡으면 클리어).
     if (runConfig.bossKind == BossKind.twin && _twinBossesSpawned) return;
     if (_bossCooldownRemaining > Duration.zero) {
       _bossCooldownRemaining -= dt;
       return;
     }
 
-    if (runConfig.bossKind == BossKind.twin) {
+    if (_nextBossIsTwin) {
       _spawnTwinBosses();
       _twinBossesSpawned = true;
+      _twinBossReinforced = false;
     } else {
       shapes.add(_createBoss(
         layers: _buildLayerNames(bossLayers),
@@ -596,7 +603,16 @@ class GameController extends ChangeNotifier {
         xFraction: 0.5,
       ));
     }
+    _bossSpawnCount++;
   }
+
+  /// 이번에 내보낼 보스가 쌍둥이인지.
+  /// alternating은 단일 -> 쌍둥이 -> 단일 ... 순으로 번갈아 나온다.
+  bool get _nextBossIsTwin => switch (runConfig.bossKind) {
+        BossKind.twin => true,
+        BossKind.single => false,
+        BossKind.alternating => _bossSpawnCount.isOdd,
+      };
 
   /// 좌우에서 동시에 내려오는 쌍둥이 보스. 두 보스는 서로 다른 도형
   /// 시퀀스를 갖는다.
@@ -613,6 +629,8 @@ class GameController extends ChangeNotifier {
         layers: i == 0 ? first : second,
         sizeFraction: twinBossSizeFraction,
         xFraction: twinBossXFractions[i],
+        // 스킬은 단일 보스 형태만 쓴다.
+        canUseSkills: false,
       ));
     }
   }
@@ -629,6 +647,7 @@ class GameController extends ChangeNotifier {
     required List<String> layers,
     required double sizeFraction,
     required double xFraction,
+    bool canUseSkills = true,
   }) {
     final traits = runConfig.bossTraits;
     final size = math.min(_fieldSize.width, _fieldSize.height) * sizeFraction;
@@ -644,21 +663,32 @@ class GameController extends ChangeNotifier {
       introDuration: bossIntroDuration,
     )
       // 생성 시 스킬 하나를 무작위로 부여받고, 그 스킬만 정해진 횟수만큼 쓴다.
-      ..assignedSkill = traits.rollAssignedSkill(_random)
-      ..skillUsesRemaining = traits.maxSkillUses
+      // 쌍둥이 보스는 스킬을 쓰지 않는다(단일 보스 형태 전용).
+      ..assignedSkill =
+          canUseSkills ? traits.rollAssignedSkill(_random) : null
+      ..skillUsesRemaining = canUseSkills ? traits.maxSkillUses : 0
       // 등장하자마자 쓰지 않도록 첫 판단까지 스킬 간격만큼 대기시킨다.
       ..skillCooldownRemaining = traits.skillInterval;
   }
 
   /// 쌍둥이 중 한쪽이 먼저 쓰러지면 남은 쪽의 남은 층수를 늘리고,
-  /// 둘 다 쓰러지면 스테이지를 클리어한다.
+  /// 스테이지의 쌍둥이전이면 둘 다 쓰러졌을 때 클리어 처리한다.
+  ///
+  /// 레이드의 번갈아 등장하는 쌍둥이는 보강만 적용하고, 잡았다고 런이
+  /// 끝나지는 않는다(무한 진행이므로).
   void _updateTwinBossState() {
-    if (runConfig.bossKind != BossKind.twin || !_twinBossesSpawned) return;
+    if (!_twinBossesSpawned) return;
 
     final living = shapes.where((s) => s.isBoss && !s.isCleared).toList();
 
     if (living.isEmpty) {
-      _status = GameStatus.cleared;
+      if (runConfig.bossKind == BossKind.twin) {
+        _status = GameStatus.cleared;
+      } else {
+        // 레이드: 다음 보스를 다시 뽑을 수 있게 상태만 되돌린다.
+        _twinBossesSpawned = false;
+        _twinBossReinforced = false;
+      }
       return;
     }
 
@@ -716,11 +746,17 @@ class GameController extends ChangeNotifier {
     bool isMissed(FallingShape s) =>
         s.isActionable && s.y - s.size / 2 > _fieldSize.height;
 
-    final missedCount = shapes.where(isMissed).length;
-    if (missedCount == 0) return false;
+    final missed = shapes.where(isMissed).toList();
+    if (missed.isEmpty) return false;
+
+    // 보스를 놓치면 일반 도형보다 훨씬 크게 깎인다.
+    final lifeCost = missed.fold<int>(
+      0,
+      (sum, s) => sum + (s.isBoss ? bossLifeCost : 1),
+    );
 
     shapes.removeWhere(isMissed);
-    _lives -= missedCount;
+    _lives -= lifeCost;
     _onLifeLost();
 
     if (_lives <= 0) {
@@ -1190,8 +1226,7 @@ class GameController extends ChangeNotifier {
     _timeSlowGauge = 0;
     _timeSlowRemaining = Duration.zero;
     _layerBreakOverlayRemaining = Duration.zero;
-    _overlayKind = null;
-    _overlayElapsed = Duration.zero;
+    _skillRings.reset();
     _twinBossesSpawned = false;
     _twinBossReinforced = false;
     _lastRecognition = null;

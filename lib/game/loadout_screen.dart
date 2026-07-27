@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../core/difficulty.dart';
 import 'game_screen.dart';
+import 'model/active_skill.dart';
 import 'model/equipped_skills.dart';
+import 'render/skill_visuals.dart';
 import 'state/unlock_state.dart';
 
 /// 런(스테이지/레이드) 시작 전, 액티브 스킬 3개 중 2개를 골라 장착하는
@@ -79,7 +81,7 @@ class _LoadoutScreenState extends State<LoadoutScreen> {
                   _SkillCard(
                     title: '더블클리어',
                     description: '토글로 켜두면 성공할 때마다 다른 그룹도 함께 클리어',
-                    color: Colors.purple,
+                    color: SkillVisuals.of(ActiveSkill.doubleClear).accent,
                     selected: _doubleClear,
                     locked: false,
                     interactive: unlocked,
@@ -89,7 +91,7 @@ class _LoadoutScreenState extends State<LoadoutScreen> {
                   _SkillCard(
                     title: '레이어 제거',
                     description: '화면의 모든 도형에서 바깥 레이어를 한 겹씩 벗김',
-                    color: Colors.cyan,
+                    color: SkillVisuals.of(ActiveSkill.layerBreak).accent,
                     selected: _layerBreak,
                     locked: false,
                     interactive: unlocked,
@@ -99,7 +101,7 @@ class _LoadoutScreenState extends State<LoadoutScreen> {
                   _SkillCard(
                     title: '타임 슬로우',
                     description: '몇 초간 화면의 모든 낙하 속도 감소',
-                    color: Colors.blue,
+                    color: SkillVisuals.of(ActiveSkill.timeSlow).accent,
                     selected: _timeSlow,
                     locked: !unlocked,
                     interactive: unlocked,

@@ -39,7 +39,13 @@ class HomeScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 32),
                     const _SectionLabel('스테이지 모드'),
-                    const _StageGrid(),
+                    // 진행도를 값으로 넘겨야 한다. const 위젯으로 두면
+                    // 인스턴스가 그대로라 AnimatedBuilder가 리빌드해도
+                    // 서브트리가 갱신되지 않아 잠금 표시가 멈춰 버린다.
+                    _StageGrid(
+                      highestClearedStage:
+                          UnlockState.instance.highestClearedStage,
+                    ),
                     const SizedBox(height: 24),
                     const _SectionLabel('레이드 모드'),
                     for (final config in RunPresets.raidCheckpoints)
@@ -78,7 +84,10 @@ class _SectionLabel extends StatelessWidget {
 
 /// 1~20단계 타일. 아직 열리지 않은 단계는 회색조 + 자물쇠로 구분한다.
 class _StageGrid extends StatelessWidget {
-  const _StageGrid();
+  const _StageGrid({required this.highestClearedStage});
+
+  /// 진행도를 필드로 받아야 값이 바뀔 때 위젯 동등성이 깨져 리빌드된다.
+  final int highestClearedStage;
 
   @override
   Widget build(BuildContext context) {
@@ -90,7 +99,7 @@ class _StageGrid extends StatelessWidget {
           _StageTile(
             stage: config.stageNumber!,
             config: config,
-            unlocked: UnlockState.instance.isStageUnlocked(config.stageNumber!),
+            unlocked: config.stageNumber! <= highestClearedStage + 1,
           ),
       ],
     );

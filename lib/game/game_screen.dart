@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../core/difficulty.dart';
+import 'model/active_skill.dart';
 import 'model/equipped_skills.dart';
 import 'render/falling_field_painter.dart';
 import 'render/skill_frame_overlay.dart';
+import 'render/skill_visuals.dart';
 import 'state/game_controller.dart';
 import 'state/unlock_state.dart';
 import 'widgets/drawing_pad.dart';
@@ -103,10 +105,7 @@ class _GameScreenState extends State<GameScreen>
                   // 배경 연출: 낙하 구역이 투명해 도형 뒤로 비쳐 보이고,
                   // 불투명한 드로잉 패드에는 가려진다.
                   Positioned.fill(
-                    child: SkillFrameOverlay(
-                      kind: _controller.skillOverlay,
-                      elapsed: _controller.skillOverlayElapsed,
-                    ),
+                    child: SkillFrameOverlay(rings: _controller.skillRings),
                   ),
                   Positioned.fill(
                     child: Column(
@@ -177,8 +176,10 @@ class _GameScreenState extends State<GameScreen>
                             isReady: _controller.isTimeSlowReady,
                             isActive: _controller.isTimeSlowActive,
                             onPressed: _controller.activateTimeSlow,
-                            accent: Colors.blue,
-                            activeAccent: Colors.lightBlueAccent,
+                            accent:
+                                SkillVisuals.of(ActiveSkill.timeSlow).accent,
+                            activeAccent:
+                                SkillVisuals.activeAccentOf(ActiveSkill.timeSlow),
                           ),
                           const SizedBox(height: 12),
                         ],
@@ -188,8 +189,10 @@ class _GameScreenState extends State<GameScreen>
                             gauge: _controller.layerBreakGauge,
                             isReady: _controller.isLayerBreakReady,
                             onPressed: _controller.activateLayerBreak,
-                            accent: Colors.cyan,
-                            activeAccent: Colors.cyanAccent,
+                            accent:
+                                SkillVisuals.of(ActiveSkill.layerBreak).accent,
+                            activeAccent: SkillVisuals.activeAccentOf(
+                                ActiveSkill.layerBreak),
                           ),
                           const SizedBox(height: 12),
                         ],
@@ -201,6 +204,10 @@ class _GameScreenState extends State<GameScreen>
                             isReady: _controller.isSkillReady,
                             isActive: _controller.isSkillActive,
                             onPressed: _controller.toggleSkill,
+                            accent:
+                                SkillVisuals.of(ActiveSkill.doubleClear).accent,
+                            activeAccent: SkillVisuals.activeAccentOf(
+                                ActiveSkill.doubleClear),
                           ),
                       ],
                     ),

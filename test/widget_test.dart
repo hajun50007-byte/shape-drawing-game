@@ -74,6 +74,22 @@ void main() {
     expect(find.text('Lv.1'), findsOneWidget);
   });
 
+  testWidgets('플레이 중 클리어하면 홈 화면 잠금 표시가 바로 갱신된다',
+      (WidgetTester tester) async {
+    // 회귀 방지: 스테이지 그리드를 const 위젯으로 두면 위젯 인스턴스가
+    // 그대로라 진행도가 바뀌어도 서브트리가 리빌드되지 않아, 1단계를
+    // 깨도 2단계가 잠긴 채로 남았다.
+    await tester.pumpWidget(const ShapeDrawingGameApp());
+    expect(find.byIcon(Icons.lock), findsNWidgets(RunPresets.stageCount - 1));
+
+    // 화면을 다시 만들지 않고 진행도만 바꾼다.
+    await UnlockState.instance.markStageCleared(1);
+    await tester.pump();
+
+    expect(find.byIcon(Icons.lock), findsNWidgets(RunPresets.stageCount - 2),
+        reason: '2단계 자물쇠가 즉시 풀려야 한다');
+  });
+
   testWidgets('특별 스테이지는 UI에 노출되지 않는다', (WidgetTester tester) async {
     await tester.pumpWidget(const ShapeDrawingGameApp());
 

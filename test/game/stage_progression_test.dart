@@ -47,11 +47,11 @@ void main() {
         } else if (n == 10) {
           expect(config.bossFromDifficulty, 10);
           expect(config.bossKind, BossKind.twin);
-          expect(config.duration, isNull, reason: '쌍둥이전은 시간 제한 없음');
         } else {
           expect(config.bossFromDifficulty, isNull, reason: '$n단계는 보스 없음');
-          expect(config.duration, RunPresets.stageDuration);
         }
+        // 보스 단계도 다른 단계와 같은 제한 시간을 갖는다.
+        expect(config.duration, RunPresets.stageDuration, reason: '$n단계');
       }
     });
 
