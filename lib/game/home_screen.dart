@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/difficulty.dart';
-import 'game_screen.dart';
+import 'loadout_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -98,7 +98,9 @@ class _ModeButton extends StatelessWidget {
         child: ElevatedButton(
           onPressed: () {
             Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => GameScreen(runConfig: config)),
+              MaterialPageRoute(
+                builder: (_) => LoadoutScreen(runConfig: config),
+              ),
             );
           },
           child: Row(

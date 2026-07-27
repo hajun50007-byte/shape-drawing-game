@@ -1,3 +1,4 @@
+import 'boss_traits.dart';
 import 'stage_theme.dart';
 
 /// 난이도 1단계당 구체적인 게임플레이 수치.
@@ -203,6 +204,9 @@ class RunConfig {
   /// 보스 등장 형태. [bossFromDifficulty]가 null이면 의미 없다.
   final BossKind bossKind;
 
+  /// 보스가 사용하는 스킬 성향. [bossFromDifficulty]가 null이면 의미 없다.
+  final BossTraits bossTraits;
+
   /// 동시 등장 최대 개수에 곱해지는 배율. 1.0이면 난이도 표의 기본값
   /// 그대로다. 후반 체크포인트를 더 빡세게 만들 때 올린다.
   final double simultaneousShapesScale;
@@ -220,6 +224,7 @@ class RunConfig {
     this.multiLayerChance = 0,
     this.bossFromDifficulty,
     this.bossKind = BossKind.single,
+    this.bossTraits = BossTraits.standard,
     this.simultaneousShapesScale = 1.0,
     this.isRaidMode = false,
     this.theme,
@@ -238,8 +243,8 @@ class RunConfig {
 /// 스테이지: 1씩 슬라이딩(1~3/2~4/3~5) — 촘촘하고 부드러운 개별 성장감
 /// 레이드: 2씩 점프하는 체크포인트(1~3/3~5/5~7) — 굵직한 압박감, "1/3/5단계"로 라벨링
 class RunPresets {
-  /// 스테이지 공통 진행 시간. (Phase 2에서 1분 30초 -> 1분으로 단축)
-  static const stageDuration = Duration(minutes: 1);
+  /// 스테이지 공통 진행 시간. (1분 30초 -> 1분 -> 45초로 단계적으로 단축)
+  static const stageDuration = Duration(seconds: 45);
 
   /// 공통 시작 라이프. (Phase 2에서 3 -> 5로 변경)
   static const startLives = 5;
@@ -312,6 +317,7 @@ class RunPresets {
     startLives: startLives,
     bossFromDifficulty: 10,
     bossKind: BossKind.twin,
+    bossTraits: BossTraits.twin,
     theme: StageTheme.accelerationLine,
   );
 

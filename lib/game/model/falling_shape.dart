@@ -1,5 +1,7 @@
 import 'dart:ui' show Color;
 
+import '../../core/boss_traits.dart';
+
 /// 화면에 떨어지고 있는 도형 하나.
 ///
 /// 다층(N-layer) 도형은 [layers]에 안쪽부터 바깥쪽 순서로 이름이 담긴다
@@ -48,6 +50,30 @@ class FallingShape {
 
   /// 등장 연출 잔여 시간. 연출 중에는 낙하도 판정도 하지 않는다.
   Duration introRemaining;
+
+  // ---------------- 보스 스킬 상태 ----------------
+  // isBoss가 아닌 도형에는 의미가 없다.
+
+  /// 다음 스킬을 고민하기까지 남은 대기 시간.
+  Duration skillCooldownRemaining = Duration.zero;
+
+  /// 텔레그래프(경고) 잔여 시간. 0보다 크면 스킬 발동을 예고하는 중이다.
+  Duration telegraphRemaining = Duration.zero;
+
+  /// 텔레그래프 중인 스킬. 텔레그래프가 끝나면 이 스킬이 발동된다.
+  BossSkillType? telegraphedSkill;
+
+  /// 가속 스킬 잔여 시간. 0보다 크면 낙하 속도가 크게 오른다.
+  Duration hasteRemaining = Duration.zero;
+
+  /// 회복 스킬을 이미 사용했는지(개체당 최대 1회).
+  bool healUsed = false;
+
+  /// 스킬 발동을 예고하는 중인지.
+  bool get isTelegraphing => telegraphRemaining > Duration.zero;
+
+  /// 가속 스킬이 적용 중인지.
+  bool get isHasted => hasteRemaining > Duration.zero;
 
   bool get isMultiLayer => layers.length > 1;
 

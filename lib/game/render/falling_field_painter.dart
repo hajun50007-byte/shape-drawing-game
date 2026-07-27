@@ -41,7 +41,7 @@ class FallingFieldPainter extends CustomPainter {
 
     for (final shape in shapes) {
       final layerCount = shape.layers.length;
-      final baseColor = ShapePalette.ensureContrast(shape.color, background);
+      final baseColor = ShapePalette.ensureContrast(_colorFor(shape), background);
 
       // 등장 연출: 작게 시작해 제자리 크기까지 커지며 서서히 진해진다.
       final intro = shape.introProgress;
@@ -66,6 +66,15 @@ class FallingFieldPainter extends CustomPainter {
         canvas.drawPath(path, paint);
       }
     }
+  }
+
+  /// 보스의 기본 색은 가속 중(빨강) > 텔레그래프 중(주황) > 평상시(보라)
+  /// 순으로 우선한다. 일반 도형은 자기 색을 그대로 쓴다.
+  Color _colorFor(FallingShape shape) {
+    if (!shape.isBoss) return shape.color;
+    if (shape.isHasted) return ShapePalette.bossHasteColor;
+    if (shape.isTelegraphing) return ShapePalette.bossTelegraphColor;
+    return shape.color;
   }
 
   /// 콤보 마지막 도형의 실루엣이 확 퍼졌다 사라진다.
@@ -107,12 +116,12 @@ class FallingFieldPainter extends CustomPainter {
   /// 도형 주변 여러 지점에서 미니 도형들이 폭죽처럼 깜빡인다.
   void _paintSparkles(Canvas canvas) {
     if (sparkles.isEmpty) return;
-    final paint = Paint()
-      ..style = PaintingStyle.fill
-      ..color = Colors.white;
+    final paint = Paint()..style = PaintingStyle.fill;
 
     for (final sparkle in sparkles) {
-      if (!sparkle.isVisible) continue;
+      final alpha = sparkle.visibleAlpha;
+      if (alpha <= 0) continue;
+      paint.color = Colors.white.withValues(alpha: alpha);
       for (final cluster in sparkle.clusters) {
         for (final point in cluster) {
           canvas.drawPath(

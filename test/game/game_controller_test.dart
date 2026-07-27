@@ -3,18 +3,39 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:shape_drawing_game/core/boss_traits.dart';
 import 'package:shape_drawing_game/core/difficulty.dart';
 import 'package:shape_drawing_game/core/shape_templates.dart';
 import 'package:shape_drawing_game/core/stage_theme.dart';
 import 'package:shape_drawing_game/game/model/clear_effect.dart';
+import 'package:shape_drawing_game/game/model/equipped_skills.dart';
 import 'package:shape_drawing_game/game/model/falling_shape.dart';
 import 'package:shape_drawing_game/game/state/game_controller.dart';
+import 'package:shape_drawing_game/game/state/unlock_state.dart';
 
-GameController _controllerFor(RunConfig config) {
-  final controller = GameController(runConfig: config, random: math.Random(7));
+GameController _controllerFor(
+  RunConfig config, {
+  EquippedSkills equipped = EquippedSkills.defaultLoadout,
+}) {
+  final controller = GameController(
+    runConfig: config,
+    random: math.Random(7),
+    equipped: equipped,
+  );
   controller.setFieldSize(const Size(400, 500));
   return controller;
 }
+
+/// 5단계 보스 스테이지를 복제하되 보스 성향(가중치/타이밍)만 바꿔치기한다.
+RunConfig _bossConfigWith(BossTraits traits) => RunConfig(
+      id: RunPresets.stage5.id,
+      minDifficulty: 5,
+      maxDifficulty: 5,
+      duration: const Duration(seconds: 45),
+      startLives: 5,
+      bossFromDifficulty: 5,
+      bossTraits: traits,
+    );
 
 FallingShape _shape(List<String> layers, {int id = 1, double y = 100}) {
   return FallingShape(
@@ -304,6 +325,113 @@ void main() {
     });
   });
 
+  group('보스 스킬', () {
+    GameController spawnedBoss(BossTraits traits) {
+      final controller = _controllerFor(_bossConfigWith(traits));
+      controller.update(const Duration(milliseconds: 16)); // 스폰
+      controller.update(GameController.bossIntroDuration); // 등장 연출 종료
+      return controller;
+    }
+
+    const healOnly = BossTraits(
+      skillWeights: {BossSkillType.heal: 1, BossSkillType.haste: 0},
+    );
+    const hasteOnly = BossTraits(
+      skillWeights: {BossSkillType.heal: 0, BossSkillType.haste: 1},
+    );
+
+    test('등장 후 스킬 간격이 지나야 첫 텔레그래프가 시작된다', () {
+      final controller = spawnedBoss(hasteOnly);
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+
+      expect(boss.isTelegraphing, isFalse);
+      controller.update(hasteOnly.skillInterval - const Duration(milliseconds: 1));
+      expect(boss.isTelegraphing, isFalse, reason: '아직 간격이 다 지나지 않았다');
+
+      controller.update(const Duration(milliseconds: 1));
+      expect(boss.isTelegraphing, isTrue);
+      expect(boss.telegraphedSkill, BossSkillType.haste);
+      expect(boss.telegraphRemaining, greaterThanOrEqualTo(hasteOnly.telegraphMin));
+      expect(boss.telegraphRemaining, lessThanOrEqualTo(hasteOnly.telegraphMax));
+    });
+
+    test('텔레그래프 중에도 그릴 수 있는 판정 대상이다', () {
+      final controller = spawnedBoss(hasteOnly);
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+
+      controller.update(hasteOnly.skillInterval);
+      expect(boss.isTelegraphing, isTrue);
+      expect(boss.isActionable, isTrue);
+    });
+
+    test('회복 스킬: 남은 층수가 +4 되고 이미 벗긴 진행은 유지된다', () {
+      final controller = spawnedBoss(healOnly);
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+      boss.clearedLayers = 2; // 진행 상황을 흉내낸다.
+      final remainingBefore = boss.remainingLayers;
+
+      controller.update(healOnly.skillInterval);
+      expect(boss.telegraphedSkill, BossSkillType.heal);
+
+      controller.update(healOnly.telegraphMax); // 텔레그래프를 확실히 끝낸다.
+
+      expect(boss.remainingLayers, remainingBefore + healOnly.healLayerBonus);
+      expect(boss.clearedLayers, 2, reason: '이미 벗긴 진행은 유지된다');
+      expect(boss.healUsed, isTrue);
+      expect(boss.isTelegraphing, isFalse);
+    });
+
+    test('회복은 개체당 최대 1회만 사용된다', () {
+      const fastHeal = BossTraits(
+        skillWeights: {BossSkillType.heal: 1, BossSkillType.haste: 0},
+        skillInterval: Duration(milliseconds: 100),
+        telegraphMin: Duration(milliseconds: 50),
+        telegraphMax: Duration(milliseconds: 50),
+      );
+      final controller = spawnedBoss(fastHeal);
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+      final layersBefore = boss.layers.length;
+
+      // 스킬 사이클을 여러 번 흘려보낸다 — 계속 heal만 뽑히더라도
+      // 두 번째부터는 후보에서 빠져야 한다.
+      for (int i = 0; i < 20; i++) {
+        controller.update(const Duration(milliseconds: 200));
+      }
+
+      expect(boss.healUsed, isTrue);
+      expect(boss.layers.length, layersBefore + fastHeal.healLayerBonus,
+          reason: '회복이 두 번 이상 적용됐다면 레이어 수가 더 늘었을 것이다');
+    });
+
+    test('가속 스킬: 낙하 속도가 대폭 빨라지고, 끝나면 원래대로 돌아온다', () {
+      final controller = spawnedBoss(hasteOnly);
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+
+      controller.update(hasteOnly.skillInterval);
+      controller.update(hasteOnly.telegraphMax);
+      expect(boss.isHasted, isTrue);
+
+      final yBefore = boss.y;
+      controller.update(const Duration(seconds: 1));
+      expect(boss.y - yBefore,
+          closeTo(GameController.bossFallSpeed * hasteOnly.hasteSpeedMultiplier, 2.0));
+
+      controller.update(hasteOnly.hasteDuration);
+      expect(boss.isHasted, isFalse);
+
+      final yAfter = boss.y;
+      controller.update(const Duration(seconds: 1));
+      expect(boss.y - yAfter, closeTo(GameController.bossFallSpeed, 2.0));
+    });
+
+    test('보스마다 스킬 가중치를 다르게 줄 수 있는 구조다', () {
+      expect(RunPresets.stage5.bossTraits, BossTraits.standard);
+      expect(RunPresets.stage10.bossTraits, BossTraits.twin);
+      expect(BossTraits.standard.skillWeights,
+          isNot(equals(BossTraits.twin.skillWeights)));
+    });
+  });
+
   group('도형별 통과 기준 보정', () {
     test('사각형만 기본 기준보다 8점 낮다', () {
       for (final level in [1.0, 3.0, 5.0, 7.0]) {
@@ -483,6 +611,49 @@ void main() {
       expect(sparkle.isVisible, isFalse, reason: '0.1초 뒤에는 꺼진다');
     });
 
+    test('반짝임은 뚝 끊기지 않고 켜질 때마다 점점 흐려진다', () {
+      final sparkle = ShapeSparkle(
+        shapeName: 'circle',
+        miniSize: 10,
+        clusters: const [],
+        blinkInterval: const Duration(milliseconds: 100),
+        blinkCount: 3,
+        duration: const Duration(milliseconds: 600),
+      );
+
+      // 켜짐 구간(step 0,2,4)마다 알파가 낮아지고, 꺼짐 구간(1,3,5)은 0.
+      expect(sparkle.visibleAlpha, 1.0); // step 0: 첫 번째 켜짐
+      sparkle.advance(const Duration(milliseconds: 100));
+      expect(sparkle.visibleAlpha, 0); // step 1: 꺼짐
+      sparkle.advance(const Duration(milliseconds: 100));
+      final second = sparkle.visibleAlpha; // step 2: 두 번째 켜짐
+      expect(second, closeTo(2 / 3, 1e-9));
+      sparkle.advance(const Duration(milliseconds: 200));
+      final third = sparkle.visibleAlpha; // step 4: 세 번째(마지막) 켜짐
+      expect(third, closeTo(1 / 3, 1e-9));
+
+      // 뒤로 갈수록(마지막 깜빡임일수록) 더 흐려진다.
+      expect(third, lessThan(second));
+      expect(second, lessThan(1.0));
+    });
+
+    test('동시에 존재하는 파티클/반짝임/버스트 개수에 상한이 있다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+
+      // 상한을 넘도록 여러 번 클리어를 반복한다.
+      for (int i = 0; i < 20; i++) {
+        controller.shapes.add(_shape(['circle'], id: 3000 + i));
+        _draw(controller, 'circle');
+      }
+
+      expect(controller.particles.length,
+          lessThanOrEqualTo(GameController.maxConcurrentParticles));
+      expect(controller.sparkles.length,
+          lessThanOrEqualTo(GameController.maxConcurrentSparkles));
+      expect(controller.bursts.length,
+          lessThanOrEqualTo(GameController.maxConcurrentBursts));
+    });
+
     test('콤보는 도형별 개별 팝업 + 보너스 팝업 하나로 표시된다', () {
       final controller = _controllerFor(RunPresets.stage1);
       controller.shapes.addAll([
@@ -652,6 +823,155 @@ void main() {
     });
   });
 
+  group('타임 슬로우 스킬과 해금', () {
+    setUp(() => UnlockState.instance.resetForTest());
+    tearDown(() => UnlockState.instance.resetForTest());
+
+    const allThree = EquippedSkills(
+      doubleClear: true,
+      layerBreak: false,
+      timeSlow: true,
+    );
+
+    GameController chargedTimeSlowController() {
+      final controller = _controllerFor(RunPresets.stage1, equipped: allThree);
+      final needed = (1 / GameController.timeSlowGainPerClear).ceil();
+      for (int i = 0; i < needed; i++) {
+        controller.shapes.add(_shape(['circle'], id: 2000 + i));
+        _draw(controller, 'circle');
+        controller.update(const Duration(milliseconds: 200));
+      }
+      return controller;
+    }
+
+    test('게이지는 다른 두 스킬과 독립적으로 찬다', () {
+      final controller = _controllerFor(RunPresets.stage1, equipped: allThree);
+      controller.shapes.add(_shape(['circle']));
+      _draw(controller, 'circle');
+
+      expect(controller.timeSlowGauge,
+          closeTo(GameController.timeSlowGainPerClear, 1e-9));
+      expect(controller.comboGauge,
+          closeTo(GameController.gaugeGainPerClear, 1e-9));
+    });
+
+    test('게이지가 다 차야 발동되고, 발동하면 화면의 모든 낙하 속도가 줄어든다', () {
+      final controller = chargedTimeSlowController();
+      controller.shapes
+        ..clear()
+        ..add(_shape(['circle'], id: 1));
+      controller.setFieldSize(const Size(400, 500));
+      expect(controller.isTimeSlowReady, isTrue);
+
+      controller.activateTimeSlow();
+      expect(controller.isTimeSlowActive, isTrue);
+      expect(controller.timeSlowGauge, 0, reason: '발동하면 게이지를 모두 쓴다');
+
+      // 충전 루프 도중 난이도 표의 자동 스폰이 끼어들 수 있으니, 관찰
+      // 대상은 id로 고정해서 추적한다(.single은 그 사이 자동 스폰된
+      // 다른 도형이 섞이면 깨진다).
+      final shape = controller.shapes.firstWhere((s) => s.id == 1);
+      final yBefore = shape.y;
+      controller.update(const Duration(seconds: 1));
+      final slowedDelta = shape.y - yBefore;
+
+      controller.update(GameController.timeSlowDuration); // 지속시간 종료
+      expect(controller.isTimeSlowActive, isFalse);
+
+      final yAfter = shape.y;
+      controller.update(const Duration(seconds: 1));
+      final normalDelta = shape.y - yAfter;
+
+      expect(slowedDelta, lessThan(normalDelta));
+    });
+
+    test('5단계 보스를 클리어하면 타임 슬로우가 해금된다', () {
+      expect(UnlockState.instance.timeSlowUnlocked, isFalse);
+
+      final controller = _controllerFor(_bossConfigWith(BossTraits.standard));
+      controller.update(const Duration(milliseconds: 16));
+      controller.update(GameController.bossIntroDuration); // 판정 가능해지도록
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+      boss.clearedLayers = boss.layers.length - 1;
+
+      _draw(controller, boss.activeName);
+
+      expect(boss.isCleared, isTrue);
+      expect(UnlockState.instance.timeSlowUnlocked, isTrue);
+    });
+
+    test('5단계가 아닌 보스(쌍둥이)를 클리어해도 해금되지 않는다', () {
+      final controller = _controllerFor(RunPresets.stage10);
+      controller.update(const Duration(milliseconds: 16));
+      controller.update(GameController.bossIntroDuration); // 판정 가능해지도록
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+      boss.clearedLayers = boss.layers.length - 1;
+
+      _draw(controller, boss.activeName);
+
+      expect(boss.isCleared, isTrue);
+      expect(UnlockState.instance.timeSlowUnlocked, isFalse);
+    });
+  });
+
+  group('장착 스킬(로드아웃) 게이팅', () {
+    test('장착하지 않은 스킬은 게이지가 차지 않는다', () {
+      const onlyDoubleClear = EquippedSkills(
+        doubleClear: true,
+        layerBreak: false,
+        timeSlow: false,
+      );
+      final controller =
+          _controllerFor(RunPresets.stage1, equipped: onlyDoubleClear);
+      controller.shapes.add(_shape(['circle']));
+      _draw(controller, 'circle');
+
+      expect(controller.comboGauge, greaterThan(0));
+      expect(controller.layerBreakGauge, 0);
+      expect(controller.timeSlowGauge, 0);
+    });
+
+    test('장착하지 않은 더블클리어는 토글해도 켜지지 않는다', () {
+      const noDoubleClear = EquippedSkills(
+        doubleClear: false,
+        layerBreak: true,
+        timeSlow: false,
+      );
+      final controller =
+          _controllerFor(RunPresets.stage1, equipped: noDoubleClear);
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1),
+        _shape(['circle'], id: 2),
+        _shape(['circle'], id: 3),
+      ]);
+      _draw(controller, 'circle'); // comboGauge를 채워봐도
+
+      controller.toggleSkill();
+      expect(controller.isSkillActive, isFalse);
+    });
+
+    test('장착하지 않은 레이어 제거는 게이지가 가득 차도 발동되지 않는다', () {
+      const noLayerBreak = EquippedSkills(
+        doubleClear: true,
+        layerBreak: false,
+        timeSlow: false,
+      );
+      final controller =
+          _controllerFor(RunPresets.stage1, equipped: noLayerBreak);
+      controller.shapes.add(_shape(['circle']));
+
+      controller.activateLayerBreak();
+      expect(controller.shapes.single.clearedLayers, 0);
+      expect(controller.isLayerBreakReady, isFalse);
+    });
+
+    test('장착하지 않은 타임 슬로우는 발동되지 않는다', () {
+      final controller = _controllerFor(RunPresets.stage1); // 기본 장착엔 timeSlow 없음
+      controller.activateTimeSlow();
+      expect(controller.isTimeSlowActive, isFalse);
+    });
+  });
+
   group('쌍둥이 보스', () {
     List<FallingShape> twinsOf(GameController c) =>
         c.shapes.where((s) => s.isBoss).toList();
@@ -783,8 +1103,8 @@ void main() {
   });
 
   group('프리셋 파라미터', () {
-    test('스테이지는 1분, 시작 라이프는 5', () {
-      expect(RunPresets.stage1.duration, const Duration(minutes: 1));
+    test('스테이지는 45초, 시작 라이프는 5', () {
+      expect(RunPresets.stage1.duration, const Duration(seconds: 45));
       expect(RunPresets.stage1.startLives, 5);
       expect(RunPresets.raidCheckpoints.first.startLives, 5);
     });

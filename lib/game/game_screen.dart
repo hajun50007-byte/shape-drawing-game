@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../core/difficulty.dart';
+import 'model/equipped_skills.dart';
 import 'render/falling_field_painter.dart';
 import 'state/game_controller.dart';
 import 'widgets/drawing_pad.dart';
@@ -15,9 +16,16 @@ const double _padHeightFraction = 0.33;
 /// 게임 화면. 상태와 규칙은 전부 [GameController]에 있고, 이 위젯은
 /// 틱 구동과 레이아웃 조립만 담당한다.
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key, required this.runConfig});
+  const GameScreen({
+    super.key,
+    required this.runConfig,
+    this.equipped = EquippedSkills.defaultLoadout,
+  });
 
   final RunConfig runConfig;
+
+  /// 로드아웃 화면에서 고른 액티브 스킬 구성.
+  final EquippedSkills equipped;
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -32,7 +40,10 @@ class _GameScreenState extends State<GameScreen>
   @override
   void initState() {
     super.initState();
-    _controller = GameController(runConfig: widget.runConfig);
+    _controller = GameController(
+      runConfig: widget.runConfig,
+      equipped: widget.equipped,
+    );
     _ticker = createTicker(_onTick)..start();
   }
 
@@ -129,23 +140,38 @@ class _GameScreenState extends State<GameScreen>
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        SkillButton(
-                          label: '레이어',
-                          gauge: _controller.layerBreakGauge,
-                          isReady: _controller.isLayerBreakReady,
-                          onPressed: _controller.activateLayerBreak,
-                          accent: Colors.cyan,
-                          activeAccent: Colors.cyanAccent,
-                        ),
-                        const SizedBox(height: 12),
-                        SkillButton(
-                          label: '2배',
-                          activeLabel: '2배 ON',
-                          gauge: _controller.comboGauge,
-                          isReady: _controller.isSkillReady,
-                          isActive: _controller.isSkillActive,
-                          onPressed: _controller.toggleSkill,
-                        ),
+                        if (widget.equipped.timeSlow) ...[
+                          SkillButton(
+                            label: '슬로우',
+                            gauge: _controller.timeSlowGauge,
+                            isReady: _controller.isTimeSlowReady,
+                            isActive: _controller.isTimeSlowActive,
+                            onPressed: _controller.activateTimeSlow,
+                            accent: Colors.blue,
+                            activeAccent: Colors.lightBlueAccent,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (widget.equipped.layerBreak) ...[
+                          SkillButton(
+                            label: '레이어',
+                            gauge: _controller.layerBreakGauge,
+                            isReady: _controller.isLayerBreakReady,
+                            onPressed: _controller.activateLayerBreak,
+                            accent: Colors.cyan,
+                            activeAccent: Colors.cyanAccent,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (widget.equipped.doubleClear)
+                          SkillButton(
+                            label: '2배',
+                            activeLabel: '2배 ON',
+                            gauge: _controller.comboGauge,
+                            isReady: _controller.isSkillReady,
+                            isActive: _controller.isSkillActive,
+                            onPressed: _controller.toggleSkill,
+                          ),
                       ],
                     ),
                   ),

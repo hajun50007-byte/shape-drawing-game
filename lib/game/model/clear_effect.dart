@@ -72,6 +72,7 @@ class ShapeSparkle extends TimedEffect {
     required this.miniSize,
     required this.clusters,
     required this.blinkInterval,
+    required this.blinkCount,
     required super.duration,
   });
 
@@ -84,12 +85,23 @@ class ShapeSparkle extends TimedEffect {
   /// 켜짐/꺼짐이 전환되는 간격.
   final Duration blinkInterval;
 
-  /// 깜빡임 위상. 짝수 구간에서만 보인다.
-  bool get isVisible {
-    if (blinkInterval == Duration.zero) return true;
+  /// 총 켜짐(on) 횟수. 뒤로 갈수록(마지막 켜짐일수록) [visibleAlpha]가
+  /// 낮아져 뚝 끊기지 않고 서서히 흐려지며 사라진다.
+  final int blinkCount;
+
+  /// 현재 프레임의 표시 알파. 꺼짐 구간이면 0이고, 켜짐 구간이면 순서가
+  /// 지날수록(마지막 깜빡임일수록) 점점 낮아진다.
+  double get visibleAlpha {
+    if (blinkInterval == Duration.zero) return 1;
     final step = elapsed.inMicroseconds ~/ blinkInterval.inMicroseconds;
-    return step.isEven;
+    if (step.isOdd) return 0; // 꺼짐 구간
+    if (blinkCount <= 1) return 1;
+    final onCycleIndex = step ~/ 2;
+    return (1 - onCycleIndex / blinkCount).clamp(0.0, 1.0);
   }
+
+  /// 지금 프레임에 뭔가 그려야 하는지.
+  bool get isVisible => visibleAlpha > 0;
 }
 
 /// 반짝임 미니 도형 하나의 절대 좌표.

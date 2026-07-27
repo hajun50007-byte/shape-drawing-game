@@ -3,27 +3,37 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/boss_traits.dart';
 import '../../core/difficulty.dart';
 import '../../core/gesture_recognizer.dart' as core;
 import '../../core/shape_templates.dart';
 import '../model/clear_effect.dart';
+import '../model/equipped_skills.dart';
 import '../model/falling_shape.dart';
 import '../render/shape_palette.dart';
 import '../render/stroke_pad_painter.dart';
+import 'unlock_state.dart';
 
 enum GameStatus { playing, cleared, gameOver }
 
 /// 게임 한 판의 모든 상태와 규칙. 위젯/렌더링에 의존하지 않으며 매 프레임
 /// [update]로만 시간이 흐른다(내부에 dart:async 타이머를 두지 않는다).
 class GameController extends ChangeNotifier {
-  GameController({required this.runConfig, math.Random? random})
-      : _random = random ?? math.Random() {
+  GameController({
+    required this.runConfig,
+    math.Random? random,
+    this.equipped = EquippedSkills.defaultLoadout,
+  }) : _random = random ?? math.Random() {
     final templates = ShapeTemplates.all;
     _recognizer = core.UnistrokeRecognizer(templates);
     _shapeNames = templates.map((t) => t.name).toList();
     _lives = runConfig.startLives;
     _difficultyLevel = runConfig.minDifficulty;
   }
+
+  /// 이 런에 장착된 액티브 스킬. 장착 안 한 스킬은 게이지가 차지 않고
+  /// 발동도 되지 않는다.
+  final EquippedSkills equipped;
 
   // ---------------- 튜닝 상수 ----------------
 
@@ -114,6 +124,12 @@ class GameController extends ChangeNotifier {
   static const Duration sparkleBlinkInterval = Duration(milliseconds: 100);
   static const int sparkleBlinkCount = 3;
 
+  /// 여러 이펙트가 겹쳐 화면이 어지러워지지 않도록 동시 존재 개수에
+  /// 상한을 둔다. 넘치면 가장 오래된 것부터 제거한다.
+  static const int maxConcurrentParticles = particlesPerShape * 4;
+  static const int maxConcurrentSparkles = 4;
+  static const int maxConcurrentBursts = 4;
+
   // ---------------- 전체 레이어 제거 스킬 ----------------
 
   /// 도형을 하나 처치할 때마다 차는 레이어 제거 게이지 양.
@@ -136,6 +152,18 @@ class GameController extends ChangeNotifier {
 
   /// 라이프 감소 시 붉은 테두리 플래시가 사라지는 속도(초당).
   static const double damageFlashDecayPerSecond = 2.5;
+
+  // ---------------- 타임 슬로우 스킬 ----------------
+
+  /// 도형을 하나 처치할 때마다 차는 타임 슬로우 게이지 양.
+  /// 다른 두 스킬과 완전히 독립적이다.
+  static const double timeSlowGainPerClear = 0.08;
+
+  /// 발동 시 낙하 속도 감소 지속 시간.
+  static const Duration timeSlowDuration = Duration(milliseconds: 3500);
+
+  /// 발동 중 모든 낙하 속도(보스 포함)에 곱해지는 배율.
+  static const double timeSlowFactor = 0.45;
 
   // ---------------- 외부 노출 상태 ----------------
 
@@ -182,7 +210,7 @@ class GameController extends ChangeNotifier {
 
   /// 0~1 콤보 게이지.
   double get comboGauge => _comboGauge;
-  bool get isSkillReady => _comboGauge >= skillMinGauge;
+  bool get isSkillReady => equipped.doubleClear && _comboGauge >= skillMinGauge;
 
   /// 토글로 켜진 상태인지. 게이지가 바닥나면 자동으로 꺼진다.
   bool get isSkillActive => _skillOn && _comboGauge > 0;
@@ -192,7 +220,16 @@ class GameController extends ChangeNotifier {
 
   /// 게이지가 가득 찼고 벗겨낼 도형이 화면에 있을 때만 발동할 수 있다.
   bool get isLayerBreakReady =>
-      _layerBreakGauge >= 1 && shapes.any((s) => s.isActionable);
+      equipped.layerBreak &&
+      _layerBreakGauge >= 1 &&
+      shapes.any((s) => s.isActionable);
+
+  /// 0~1 타임 슬로우 게이지. 다른 두 스킬과 독립적이다.
+  double get timeSlowGauge => _timeSlowGauge;
+  bool get isTimeSlowReady => equipped.timeSlow && _timeSlowGauge >= 1;
+
+  /// 낙하 속도 감소가 적용 중인지.
+  bool get isTimeSlowActive => _timeSlowRemaining > Duration.zero;
 
   Size get fieldSize => _fieldSize;
 
@@ -222,6 +259,8 @@ class GameController extends ChangeNotifier {
   double _comboGauge = 0;
   bool _skillOn = false;
   double _layerBreakGauge = 0;
+  double _timeSlowGauge = 0;
+  Duration _timeSlowRemaining = Duration.zero;
 
   /// 쌍둥이 보스를 이미 내보냈는지. 재소환 방지와 클리어 판정에 쓴다.
   bool _twinBossesSpawned = false;
@@ -255,6 +294,8 @@ class GameController extends ChangeNotifier {
     _tickEffects(dt);
     _tickSkill(dtSeconds);
     _tickDoubleClear(dt);
+    _tickTimeSlow(dt);
+    _tickBossSkills(dt);
     _tickShapes(dt, dtSeconds, params);
     _trySpawn(params);
     _trySpawnBoss(dt);
@@ -322,9 +363,7 @@ class GameController extends ChangeNotifier {
 
     final comboBonus = comboBonusFor(_doubleClearScore, affected.length);
     _score += _doubleClearScore * affected.length + comboBonus;
-    _comboGauge =
-        math.min(1.0, _comboGauge + gaugeGainPerClear * affected.length);
-    _addLayerBreakCharge(affected);
+    _chargeSkillGauges(affected);
     _spawnClearEffects(affected, _doubleClearScore, comboBonus);
     HapticFeedback.lightImpact();
     SystemSound.play(SystemSoundType.click);
@@ -347,13 +386,113 @@ class GameController extends ChangeNotifier {
         continue;
       }
       if (shape.isCleared) continue;
-      // 보스는 난이도와 무관한 고정 속도로 내려온다.
-      final speed = shape.isBoss
-          ? (runConfig.isRaidMode ? raidBossFallSpeed : bossFallSpeed)
-          : params.fallSpeed;
-      shape.y += speed * dtSeconds;
+      shape.y += _fallSpeedFor(shape, params) * dtSeconds;
     }
     shapes.removeWhere((s) => s.isFinished);
+  }
+
+  /// 도형 하나의 현재 낙하 속도. 보스는 난이도와 무관한 고정 속도(가속
+  /// 스킬 중이면 그 배율만큼 더 빠름)를, 일반 도형은 난이도 표 값을
+  /// 쓰고, 타임 슬로우가 켜져 있으면 종류와 무관하게 전부 느려진다.
+  double _fallSpeedFor(FallingShape shape, DifficultyParams params) {
+    double speed;
+    if (shape.isBoss) {
+      final base = runConfig.isRaidMode ? raidBossFallSpeed : bossFallSpeed;
+      speed =
+          shape.isHasted ? base * runConfig.bossTraits.hasteSpeedMultiplier : base;
+    } else {
+      speed = params.fallSpeed;
+    }
+    if (isTimeSlowActive) speed *= timeSlowFactor;
+    return speed;
+  }
+
+  void _tickTimeSlow(Duration dt) {
+    if (_timeSlowRemaining <= Duration.zero) return;
+    _timeSlowRemaining -= dt;
+    if (_timeSlowRemaining < Duration.zero) _timeSlowRemaining = Duration.zero;
+  }
+
+  /// 살아있는 보스마다 스킬 대기 -> 텔레그래프 -> 발동 사이클을 진행한다.
+  void _tickBossSkills(Duration dt) {
+    final traits = runConfig.bossTraits;
+    for (final shape in shapes) {
+      if (!shape.isBoss || !shape.isActionable) continue;
+
+      if (shape.hasteRemaining > Duration.zero) {
+        shape.hasteRemaining -= dt;
+        if (shape.hasteRemaining < Duration.zero) {
+          shape.hasteRemaining = Duration.zero;
+        }
+      }
+
+      if (shape.isTelegraphing) {
+        shape.telegraphRemaining -= dt;
+        if (shape.telegraphRemaining <= Duration.zero) {
+          shape.telegraphRemaining = Duration.zero;
+          final skill = shape.telegraphedSkill;
+          shape.telegraphedSkill = null;
+          if (skill != null) _executeBossSkill(shape, skill, traits);
+          shape.skillCooldownRemaining = traits.skillInterval;
+        }
+        continue;
+      }
+
+      if (shape.skillCooldownRemaining > Duration.zero) {
+        shape.skillCooldownRemaining -= dt;
+        // 이번 프레임에 마침 다 닳았으면 바로 아래에서 스킬을 고른다.
+        if (shape.skillCooldownRemaining > Duration.zero) continue;
+      }
+
+      final skill = _pickBossSkill(shape, traits);
+      if (skill == null) {
+        // 더 뽑을 스킬이 없으면(예: 회복을 이미 다 쓴 경우) 잠시 후 재시도.
+        shape.skillCooldownRemaining = traits.skillInterval;
+        continue;
+      }
+      shape.telegraphedSkill = skill;
+      shape.telegraphRemaining = traits.rollTelegraphDuration(_random);
+    }
+  }
+
+  /// 가중치에 따라 스킬을 하나 고른다. 회복은 이미 썼으면 후보에서 빠진다.
+  BossSkillType? _pickBossSkill(FallingShape boss, BossTraits traits) {
+    final candidates = <MapEntry<BossSkillType, double>>[];
+    for (final entry in traits.skillWeights.entries) {
+      if (entry.value <= 0) continue;
+      if (entry.key == BossSkillType.heal && boss.healUsed) continue;
+      candidates.add(entry);
+    }
+    if (candidates.isEmpty) return null;
+
+    final total = candidates.fold<double>(0, (sum, e) => sum + e.value);
+    var roll = _random.nextDouble() * total;
+    for (final entry in candidates) {
+      roll -= entry.value;
+      if (roll <= 0) return entry.key;
+    }
+    return candidates.last.key;
+  }
+
+  void _executeBossSkill(
+    FallingShape boss,
+    BossSkillType skill,
+    BossTraits traits,
+  ) {
+    switch (skill) {
+      case BossSkillType.heal:
+        // 이미 벗겨낸 진행은 그대로 두고, 남은 레이어 "바깥"(배열 끝,
+        // 다음에 클리어할 지점)에 새 레이어를 덧붙여 "층수 +N"을
+        // 구현한다. 새로 붙은 층부터 다시 벗겨내야 한다.
+        final currentRemaining = boss.layers.sublist(0, boss.remainingLayers);
+        boss.setRemainingLayers([
+          ...currentRemaining,
+          ..._buildLayerNames(traits.healLayerBonus),
+        ]);
+        boss.healUsed = true;
+      case BossSkillType.haste:
+        boss.hasteRemaining = traits.hasteDuration;
+    }
   }
 
   void _trySpawn(DifficultyParams params) {
@@ -450,7 +589,8 @@ class GameController extends ChangeNotifier {
       color: ShapePalette.multiLayerColor,
       isBoss: true,
       introDuration: bossIntroDuration,
-    );
+      // 등장하자마자 스킬을 쓰지 않도록, 첫 판단까지 스킬 간격만큼 대기시킨다.
+    )..skillCooldownRemaining = runConfig.bossTraits.skillInterval;
   }
 
   /// 쌍둥이 중 한쪽이 먼저 쓰러지면 남은 쪽의 남은 층수를 늘리고,
@@ -601,9 +741,7 @@ class GameController extends ChangeNotifier {
       final perShape = result.score.round();
       final comboBonus = comboBonusFor(perShape, affected.length);
       _score += perShape * affected.length + comboBonus;
-      _comboGauge =
-          math.min(1.0, _comboGauge + gaugeGainPerClear * affected.length);
-      _addLayerBreakCharge(affected);
+      _chargeSkillGauges(affected);
       _spawnClearEffects(affected, perShape, comboBonus);
       _strokeFeedback = StrokeFeedback.hit;
       _lastMissScore = null;
@@ -628,11 +766,26 @@ class GameController extends ChangeNotifier {
     final affected = <FallingShape>[];
     for (final shape in shapes) {
       if (!shape.isActionable || shape.activeName != name) continue;
-      shape.clearedLayers++;
-      shape.flashRemaining = clearFlashDuration;
+      _peelLayer(shape);
       affected.add(shape);
     }
     return affected;
+  }
+
+  /// 도형 하나의 바깥 레이어를 한 겹 벗기고 플래시를 건다. 보스가 이걸로
+  /// 완전히 쓰러지면 해당 훅을 실행한다.
+  void _peelLayer(FallingShape shape) {
+    shape.clearedLayers++;
+    shape.flashRemaining = clearFlashDuration;
+    if (shape.isBoss && shape.isCleared) _onBossCleared(shape);
+  }
+
+  /// 보스가 쓰러졌을 때의 훅. 지금은 5단계 보스 클리어 시 타임 슬로우
+  /// 해금에만 쓰인다.
+  void _onBossCleared(FallingShape boss) {
+    if (runConfig.id == RunPresets.stage5.id) {
+      UnlockState.instance.unlockTimeSlow();
+    }
   }
 
   /// 동시 클리어 보너스 점수.
@@ -678,6 +831,7 @@ class GameController extends ChangeNotifier {
         size: last.size,
         duration: burstDuration,
       ));
+      _capList(bursts, maxConcurrentBursts);
     }
 
     if (comboBonus > 0) {
@@ -737,9 +891,11 @@ class GameController extends ChangeNotifier {
       miniSize: shape.size * sparkleMiniSizeFactor,
       clusters: clusters,
       blinkInterval: sparkleBlinkInterval,
+      blinkCount: sparkleBlinkCount,
       // 켜짐/꺼짐 한 쌍이 한 번의 깜빡임이므로 2배.
       duration: sparkleBlinkInterval * (sparkleBlinkCount * 2),
     ));
+    _capList(sparkles, maxConcurrentSparkles);
   }
 
   void _spawnParticles(FallingShape shape) {
@@ -759,6 +915,14 @@ class GameController extends ChangeNotifier {
         velocityY: math.sin(angle) * speed,
         duration: particleDuration,
       ));
+    }
+    _capList(particles, maxConcurrentParticles);
+  }
+
+  /// 이펙트 목록이 상한을 넘으면 가장 오래된 것부터 제거한다.
+  void _capList<T>(List<T> list, int max) {
+    while (list.length > max) {
+      list.removeAt(0);
     }
   }
 
@@ -791,29 +955,54 @@ class GameController extends ChangeNotifier {
     return best;
   }
 
+  /// 장착된 스킬들의 게이지를 한 번에 채운다. 더블클리어는 레이어를 벗긴
+  /// 횟수(맞은 도형 수)로, 레이어 제거·타임 슬로우는 완전히 처치한
+  /// 도형 수로 찬다.
+  void _chargeSkillGauges(List<FallingShape> affected) {
+    if (affected.isEmpty) return;
+    if (equipped.doubleClear) {
+      _comboGauge =
+          math.min(1.0, _comboGauge + gaugeGainPerClear * affected.length);
+    }
+    if (equipped.layerBreak) _addLayerBreakCharge(affected);
+    if (equipped.timeSlow) _addTimeSlowCharge(affected);
+  }
+
   /// 도형을 처치한 만큼 레이어 제거 게이지를 채운다.
   /// 레이어만 벗겨진 경우는 제외하고 완전히 사라진 도형만 센다.
   void _addLayerBreakCharge(List<FallingShape> affected) {
     final destroyed = affected.where((s) => s.isCleared).length;
     if (destroyed == 0) return;
     _layerBreakGauge =
-        math.min(1.0, _layerBreakGauge + layerBreakGainPerClear * destroyed);
-    // 0.1씩 열 번 더해도 부동소수점 오차로 1.0에 살짝 못 미친다.
-    // 그러면 게이지가 영영 가득 차지 않으므로 근접하면 딱 맞춰준다.
-    if (_layerBreakGauge > 1 - 1e-9) _layerBreakGauge = 1;
+        _snapToFull(_layerBreakGauge + layerBreakGainPerClear * destroyed);
+  }
+
+  /// 도형을 처치한 만큼 타임 슬로우 게이지를 채운다.
+  void _addTimeSlowCharge(List<FallingShape> affected) {
+    final destroyed = affected.where((s) => s.isCleared).length;
+    if (destroyed == 0) return;
+    _timeSlowGauge =
+        _snapToFull(_timeSlowGauge + timeSlowGainPerClear * destroyed);
+  }
+
+  /// 0.1 같은 소수를 여러 번 더하면 부동소수점 오차로 1.0에 살짝 못
+  /// 미쳐 게이지가 영영 가득 차지 않는 문제를 막는다.
+  double _snapToFull(double value) {
+    final clamped = math.min(1.0, value);
+    return clamped > 1 - 1e-9 ? 1.0 : clamped;
   }
 
   /// 전체 레이어 제거 스킬. 화면의 모든 도형에서 현재 바깥 레이어를
   /// 한 겹씩 벗긴다. 1층 도형은 그대로 클리어되고, 다층·보스 도형은
   /// 다음 레이어가 노출된다.
   void activateLayerBreak() {
+    if (!equipped.layerBreak) return;
     if (!isLayerBreakReady) return;
 
     final affected = <FallingShape>[];
     for (final shape in shapes) {
       if (!shape.isActionable) continue;
-      shape.clearedLayers++;
-      shape.flashRemaining = clearFlashDuration;
+      _peelLayer(shape);
       affected.add(shape);
     }
     if (affected.isEmpty) return;
@@ -833,12 +1022,24 @@ class GameController extends ChangeNotifier {
 
   /// 스킬을 켜고 끈다. 게이지가 최소치에 못 미치면 켤 수 없다.
   void toggleSkill() {
+    if (!equipped.doubleClear) return;
     if (_skillOn) {
       _skillOn = false;
     } else {
       if (!isSkillReady) return;
       _skillOn = true;
     }
+    notifyListeners();
+  }
+
+  /// 타임 슬로우 스킬. 발동 시 게이지를 전부 쓰고 일정 시간 화면의 모든
+  /// 낙하 속도가 느려진다.
+  void activateTimeSlow() {
+    if (!isTimeSlowReady) return;
+    _timeSlowGauge = 0;
+    _timeSlowRemaining = timeSlowDuration;
+    HapticFeedback.mediumImpact();
+    SystemSound.play(SystemSoundType.click);
     notifyListeners();
   }
 
@@ -864,6 +1065,8 @@ class GameController extends ChangeNotifier {
     _comboGauge = 0;
     _skillOn = false;
     _layerBreakGauge = 0;
+    _timeSlowGauge = 0;
+    _timeSlowRemaining = Duration.zero;
     _twinBossesSpawned = false;
     _twinBossReinforced = false;
     _lastRecognition = null;

@@ -17,6 +17,14 @@ class ShapePalette {
   /// 다층 도형 전용 채도 높은 보라.
   static const multiLayerColor = Color(0xFF9B2FE0);
 
+  /// 보스가 스킬 발동을 예고(텔레그래프)하는 동안의 색. 스킬 종류와
+  /// 무관하게 경고 의미로 통일한다.
+  static const bossTelegraphColor = Color(0xFFFFB300);
+
+  /// 가속 스킬이 적용 중인 보스의 색. 평상시(보라)·텔레그래프(주황)와
+  /// 모두 구분되는 세 번째 색.
+  static const bossHasteColor = Color(0xFFE0304F);
+
   /// 배경과 "너무 비슷하다"고 볼 명도 차이 임계값.
   static const double _minLightnessDiff = 0.18;
 
