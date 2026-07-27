@@ -34,6 +34,38 @@ class DamageFlashOverlay extends StatelessWidget {
   }
 }
 
+/// 라이프가 얼마 안 남았을 때 배경을 아주 은은하게 붉게 물들인다.
+/// 실패 순간의 [DamageFlashOverlay]와 달리 상시 깔리는 상태 표시라
+/// 훨씬 약하게, 가장자리에서 안쪽으로 옅게만 번지게 한다.
+class LowLifeTintOverlay extends StatelessWidget {
+  const LowLifeTintOverlay({super.key, required this.active});
+
+  final bool active;
+
+  /// 가장자리에서의 최대 농도. 은은해야 하므로 아주 낮게 잡는다.
+  static const double edgeOpacity = 0.16;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!active) return const IgnorePointer(child: SizedBox.expand());
+    return IgnorePointer(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            radius: 1.0,
+            colors: [
+              Colors.red.withValues(alpha: 0),
+              Colors.red.withValues(alpha: edgeOpacity),
+            ],
+            stops: const [0.55, 1.0],
+          ),
+        ),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+}
+
 class GameEndOverlay extends StatelessWidget {
   const GameEndOverlay({
     super.key,

@@ -15,6 +15,20 @@ double layerScale(int layerIndex, int layerCount) {
   return (layerIndex + 1) / layerCount;
 }
 
+/// 삼각형 안에 다음 레이어가 들어갈 때 위로 밀어 올리는 비율
+/// (감싸는 삼각형 레이어의 크기 대비).
+///
+/// 삼각형은 아래로 갈수록 넓어져서, 내용물을 기하학적 중심에 두면
+/// 시각적으로 아래로 쏠려 보인다. 살짝 올려야 가운데처럼 보인다.
+const double triangleInnerOffsetFactor = 0.09;
+
+/// [enclosingShapeName]이 감쌀 때, 그 안쪽 레이어에 적용할 y 오프셋.
+/// 화면 좌표는 y가 아래로 증가하므로 음수가 "위쪽"이다.
+double innerLayerOffsetY(String enclosingShapeName, double enclosingSize) {
+  if (enclosingShapeName != 'triangle') return 0;
+  return -enclosingSize * triangleInnerOffsetFactor;
+}
+
 /// 이름에 해당하는 도형을 (cx, cy) 중심 · 지정 크기로 그린 닫힌 Path.
 Path buildShapePath(String name, double cx, double cy, double size) {
   final points = _templatePoints[name];

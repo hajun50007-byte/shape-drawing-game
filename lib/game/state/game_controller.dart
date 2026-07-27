@@ -16,6 +16,10 @@ import 'unlock_state.dart';
 
 enum GameStatus { playing, cleared, gameOver }
 
+/// 액티브 스킬이 켜져 있는 동안 배경에 깔리는 연출의 종류.
+/// 스킬별로 프레임 색이 다르다.
+enum SkillOverlayKind { doubleClear, layerBreak, timeSlow }
+
 /// 게임 한 판의 모든 상태와 규칙. 위젯/렌더링에 의존하지 않으며 매 프레임
 /// [update]로만 시간이 흐른다(내부에 dart:async 타이머를 두지 않는다).
 class GameController extends ChangeNotifier {
@@ -165,6 +169,13 @@ class GameController extends ChangeNotifier {
   /// 발동 중 모든 낙하 속도(보스 포함)에 곱해지는 배율.
   static const double timeSlowFactor = 0.45;
 
+  /// 즉시 발동형인 "전체 레이어 제거"의 배경 연출 표시 시간.
+  /// 지속시간이 없는 스킬이라 잠깐만 보여준다.
+  static const Duration layerBreakOverlayDuration = Duration(seconds: 1);
+
+  /// 라이프가 이 수 이하로 남으면 배경을 은은하게 붉게 물들인다.
+  static const int lowLifeThreshold = 1;
+
   // ---------------- 외부 노출 상태 ----------------
 
   final RunConfig runConfig;
@@ -231,6 +242,16 @@ class GameController extends ChangeNotifier {
   /// 낙하 속도 감소가 적용 중인지.
   bool get isTimeSlowActive => _timeSlowRemaining > Duration.zero;
 
+  /// 지금 배경에 깔아야 할 스킬 연출. 없으면 null.
+  SkillOverlayKind? get skillOverlay => _overlayKind;
+
+  /// 현재 연출이 시작된 뒤 흐른 시간. 프레임 등장·색 전환 순서 계산에 쓴다.
+  Duration get skillOverlayElapsed => _overlayElapsed;
+
+  /// 라이프가 얼마 안 남아 배경을 붉게 물들여야 하는지.
+  bool get isLowLife =>
+      _status == GameStatus.playing && _lives > 0 && _lives <= lowLifeThreshold;
+
   Size get fieldSize => _fieldSize;
 
   // ---------------- 내부 상태 ----------------
@@ -261,6 +282,12 @@ class GameController extends ChangeNotifier {
   double _layerBreakGauge = 0;
   double _timeSlowGauge = 0;
   Duration _timeSlowRemaining = Duration.zero;
+
+  /// 즉시 발동형 레이어 제거의 연출 잔여 시간.
+  Duration _layerBreakOverlayRemaining = Duration.zero;
+
+  SkillOverlayKind? _overlayKind;
+  Duration _overlayElapsed = Duration.zero;
 
   /// 쌍둥이 보스를 이미 내보냈는지. 재소환 방지와 클리어 판정에 쓴다.
   bool _twinBossesSpawned = false;
@@ -295,6 +322,7 @@ class GameController extends ChangeNotifier {
     _tickSkill(dtSeconds);
     _tickDoubleClear(dt);
     _tickTimeSlow(dt);
+    _tickSkillOverlay(dt);
     _tickBossSkills(dt);
     _tickShapes(dt, dtSeconds, params);
     _trySpawn(params);
@@ -413,7 +441,38 @@ class GameController extends ChangeNotifier {
     if (_timeSlowRemaining < Duration.zero) _timeSlowRemaining = Duration.zero;
   }
 
+  /// 지금 어떤 스킬 연출을 보여줄지 정하고, 같은 연출이 이어지는 동안
+  /// 경과 시간을 누적한다(프레임 등장·색 전환 순서에 쓰인다).
+  void _tickSkillOverlay(Duration dt) {
+    if (_layerBreakOverlayRemaining > Duration.zero) {
+      _layerBreakOverlayRemaining -= dt;
+      if (_layerBreakOverlayRemaining < Duration.zero) {
+        _layerBreakOverlayRemaining = Duration.zero;
+      }
+    }
+
+    // 즉시 발동형이라 짧게 지나가는 레이어 제거를 가장 우선해서 보여준다.
+    final SkillOverlayKind? desired;
+    if (_layerBreakOverlayRemaining > Duration.zero) {
+      desired = SkillOverlayKind.layerBreak;
+    } else if (isTimeSlowActive) {
+      desired = SkillOverlayKind.timeSlow;
+    } else if (isSkillActive) {
+      desired = SkillOverlayKind.doubleClear;
+    } else {
+      desired = null;
+    }
+
+    if (desired != _overlayKind) {
+      _overlayKind = desired;
+      _overlayElapsed = Duration.zero;
+    } else if (desired != null) {
+      _overlayElapsed += dt;
+    }
+  }
+
   /// 살아있는 보스마다 스킬 대기 -> 텔레그래프 -> 발동 사이클을 진행한다.
+  /// 보스는 생성 시 부여받은 스킬 하나만, 남은 횟수만큼만 사용한다.
   void _tickBossSkills(Duration dt) {
     final traits = runConfig.bossTraits;
     for (final shape in shapes) {
@@ -432,46 +491,29 @@ class GameController extends ChangeNotifier {
           shape.telegraphRemaining = Duration.zero;
           final skill = shape.telegraphedSkill;
           shape.telegraphedSkill = null;
-          if (skill != null) _executeBossSkill(shape, skill, traits);
-          shape.skillCooldownRemaining = traits.skillInterval;
+          if (skill != null) {
+            _executeBossSkill(shape, skill, traits);
+            shape.skillUsesRemaining--;
+          }
+          // 연속 시전을 막기 위해 기본 간격에 시전 후 쿨다운을 더한다.
+          shape.skillCooldownRemaining =
+              traits.skillInterval + traits.postCastCooldown;
         }
         continue;
       }
 
+      // 부여된 스킬이 없거나 사용 횟수를 다 썼으면 더는 아무것도 하지 않는다.
+      if (!shape.canUseSkill) continue;
+
       if (shape.skillCooldownRemaining > Duration.zero) {
         shape.skillCooldownRemaining -= dt;
-        // 이번 프레임에 마침 다 닳았으면 바로 아래에서 스킬을 고른다.
+        // 이번 프레임에 마침 다 닳았으면 바로 아래에서 텔레그래프를 시작한다.
         if (shape.skillCooldownRemaining > Duration.zero) continue;
       }
 
-      final skill = _pickBossSkill(shape, traits);
-      if (skill == null) {
-        // 더 뽑을 스킬이 없으면(예: 회복을 이미 다 쓴 경우) 잠시 후 재시도.
-        shape.skillCooldownRemaining = traits.skillInterval;
-        continue;
-      }
-      shape.telegraphedSkill = skill;
+      shape.telegraphedSkill = shape.assignedSkill;
       shape.telegraphRemaining = traits.rollTelegraphDuration(_random);
     }
-  }
-
-  /// 가중치에 따라 스킬을 하나 고른다. 회복은 이미 썼으면 후보에서 빠진다.
-  BossSkillType? _pickBossSkill(FallingShape boss, BossTraits traits) {
-    final candidates = <MapEntry<BossSkillType, double>>[];
-    for (final entry in traits.skillWeights.entries) {
-      if (entry.value <= 0) continue;
-      if (entry.key == BossSkillType.heal && boss.healUsed) continue;
-      candidates.add(entry);
-    }
-    if (candidates.isEmpty) return null;
-
-    final total = candidates.fold<double>(0, (sum, e) => sum + e.value);
-    var roll = _random.nextDouble() * total;
-    for (final entry in candidates) {
-      roll -= entry.value;
-      if (roll <= 0) return entry.key;
-    }
-    return candidates.last.key;
   }
 
   void _executeBossSkill(
@@ -489,7 +531,6 @@ class GameController extends ChangeNotifier {
           ...currentRemaining,
           ..._buildLayerNames(traits.healLayerBonus),
         ]);
-        boss.healUsed = true;
       case BossSkillType.haste:
         boss.hasteRemaining = traits.hasteDuration;
     }
@@ -578,6 +619,7 @@ class GameController extends ChangeNotifier {
     required double sizeFraction,
     required double xFraction,
   }) {
+    final traits = runConfig.bossTraits;
     final size = math.min(_fieldSize.width, _fieldSize.height) * sizeFraction;
     return FallingShape(
       id: _nextShapeId++,
@@ -589,8 +631,12 @@ class GameController extends ChangeNotifier {
       color: ShapePalette.multiLayerColor,
       isBoss: true,
       introDuration: bossIntroDuration,
-      // 등장하자마자 스킬을 쓰지 않도록, 첫 판단까지 스킬 간격만큼 대기시킨다.
-    )..skillCooldownRemaining = runConfig.bossTraits.skillInterval;
+    )
+      // 생성 시 스킬 하나를 무작위로 부여받고, 그 스킬만 정해진 횟수만큼 쓴다.
+      ..assignedSkill = traits.rollAssignedSkill(_random)
+      ..skillUsesRemaining = traits.maxSkillUses
+      // 등장하자마자 쓰지 않도록 첫 판단까지 스킬 간격만큼 대기시킨다.
+      ..skillCooldownRemaining = traits.skillInterval;
   }
 
   /// 쌍둥이 중 한쪽이 먼저 쓰러지면 남은 쪽의 남은 층수를 늘리고,
@@ -645,17 +691,13 @@ class GameController extends ChangeNotifier {
     );
   }
 
-  /// 인접한 레이어가 같은 도형이면 중첩이 안 보이므로 연속 중복만 피한다.
+  /// 레이어 이름을 무작위로 뽑는다. 같은 도형끼리의 조합(예: 사각형 안에
+  /// 사각형)도 그대로 허용한다 — 크기 차이로 중첩이 충분히 구분된다.
   List<String> _buildLayerNames(int count) {
-    final names = <String>[];
-    for (int i = 0; i < count; i++) {
-      String pick;
-      do {
-        pick = _shapeNames[_random.nextInt(_shapeNames.length)];
-      } while (names.isNotEmpty && names.last == pick && _shapeNames.length > 1);
-      names.add(pick);
-    }
-    return names;
+    return List.generate(
+      count,
+      (_) => _shapeNames[_random.nextInt(_shapeNames.length)],
+    );
   }
 
   /// 바닥으로 흘려보낸 도형을 처리한다. 게임 오버면 true.
@@ -1008,6 +1050,7 @@ class GameController extends ChangeNotifier {
     if (affected.isEmpty) return;
 
     _layerBreakGauge = 0;
+    _layerBreakOverlayRemaining = layerBreakOverlayDuration;
 
     // 점수는 현재 난이도의 통과 기준을 획득 점수로 삼는다.
     final perShape = currentThreshold.round();
@@ -1067,6 +1110,9 @@ class GameController extends ChangeNotifier {
     _layerBreakGauge = 0;
     _timeSlowGauge = 0;
     _timeSlowRemaining = Duration.zero;
+    _layerBreakOverlayRemaining = Duration.zero;
+    _overlayKind = null;
+    _overlayElapsed = Duration.zero;
     _twinBossesSpawned = false;
     _twinBossReinforced = false;
     _lastRecognition = null;

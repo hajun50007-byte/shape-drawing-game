@@ -54,6 +54,13 @@ class FallingShape {
   // ---------------- 보스 스킬 상태 ----------------
   // isBoss가 아닌 도형에는 의미가 없다.
 
+  /// 생성 시 부여받은 스킬. 이 보스는 평생 이 스킬 하나만 사용한다.
+  /// null이면 스킬을 쓰지 않는 보스.
+  BossSkillType? assignedSkill;
+
+  /// 남은 스킬 사용 횟수.
+  int skillUsesRemaining = 0;
+
   /// 다음 스킬을 고민하기까지 남은 대기 시간.
   Duration skillCooldownRemaining = Duration.zero;
 
@@ -66,14 +73,14 @@ class FallingShape {
   /// 가속 스킬 잔여 시간. 0보다 크면 낙하 속도가 크게 오른다.
   Duration hasteRemaining = Duration.zero;
 
-  /// 회복 스킬을 이미 사용했는지(개체당 최대 1회).
-  bool healUsed = false;
-
   /// 스킬 발동을 예고하는 중인지.
   bool get isTelegraphing => telegraphRemaining > Duration.zero;
 
   /// 가속 스킬이 적용 중인지.
   bool get isHasted => hasteRemaining > Duration.zero;
+
+  /// 아직 스킬을 더 쓸 수 있는지.
+  bool get canUseSkill => assignedSkill != null && skillUsesRemaining > 0;
 
   bool get isMultiLayer => layers.length > 1;
 

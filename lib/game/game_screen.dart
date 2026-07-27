@@ -4,6 +4,7 @@ import 'package:flutter/scheduler.dart';
 import '../core/difficulty.dart';
 import 'model/equipped_skills.dart';
 import 'render/falling_field_painter.dart';
+import 'render/skill_frame_overlay.dart';
 import 'state/game_controller.dart';
 import 'widgets/drawing_pad.dart';
 import 'widgets/game_hud.dart';
@@ -78,6 +79,14 @@ class _GameScreenState extends State<GameScreen>
               animation: _controller,
               builder: (context, _) => Stack(
                 children: [
+                  // 배경 연출: 낙하 구역이 투명해 도형 뒤로 비쳐 보이고,
+                  // 불투명한 드로잉 패드에는 가려진다.
+                  Positioned.fill(
+                    child: SkillFrameOverlay(
+                      kind: _controller.skillOverlay,
+                      elapsed: _controller.skillOverlayElapsed,
+                    ),
+                  ),
                   Positioned.fill(
                     child: Column(
                       children: [
@@ -184,6 +193,9 @@ class _GameScreenState extends State<GameScreen>
                           _controller.currentThreshold,
                       baseThreshold: _controller.currentThreshold,
                     ),
+                  ),
+                  Positioned.fill(
+                    child: LowLifeTintOverlay(active: _controller.isLowLife),
                   ),
                   Positioned.fill(
                     child: DamageFlashOverlay(

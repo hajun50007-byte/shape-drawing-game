@@ -370,8 +370,8 @@ class RunPresets {
         maxLayers: 2,
         multiLayerChance: 0.4,
         bossFromDifficulty: raidBossDifficulty,
-        // 체크포인트 7부터는 동시 등장 상한을 1.5배로 올려 압박을 준다.
-        simultaneousShapesScale: 1.5,
+        // 체크포인트 7부터는 동시 등장 상한을 2배로 올려 압박을 준다.
+        simultaneousShapesScale: 2.0,
         theme: StageTheme.accelerationLine),
   ];
 }

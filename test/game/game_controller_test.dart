@@ -10,6 +10,7 @@ import 'package:shape_drawing_game/core/stage_theme.dart';
 import 'package:shape_drawing_game/game/model/clear_effect.dart';
 import 'package:shape_drawing_game/game/model/equipped_skills.dart';
 import 'package:shape_drawing_game/game/model/falling_shape.dart';
+import 'package:shape_drawing_game/game/render/skill_frame_overlay.dart';
 import 'package:shape_drawing_game/game/state/game_controller.dart';
 import 'package:shape_drawing_game/game/state/unlock_state.dart';
 
@@ -364,7 +365,33 @@ void main() {
       expect(boss.isActionable, isTrue);
     });
 
-    test('회복 스킬: 남은 층수가 +4 되고 이미 벗긴 진행은 유지된다', () {
+    test('보스는 생성 시 스킬 하나만 부여받고 그것만 쓴다', () {
+      // 회복/가속이 반반인 성향으로 여러 보스를 만들어도, 개체 하나가
+      // 두 스킬을 번갈아 쓰는 일은 없어야 한다.
+      for (int seed = 0; seed < 8; seed++) {
+        final controller = GameController(
+          runConfig: _bossConfigWith(BossTraits.standard),
+          random: math.Random(seed),
+        )..setFieldSize(const Size(400, 500));
+        controller.update(const Duration(milliseconds: 16));
+        controller.update(GameController.bossIntroDuration);
+
+        final boss = controller.shapes.firstWhere((s) => s.isBoss);
+        expect(boss.assignedSkill, isNotNull);
+        final assigned = boss.assignedSkill;
+
+        final seen = <BossSkillType>{};
+        for (int i = 0; i < 60; i++) {
+          controller.update(const Duration(milliseconds: 200));
+          final telegraphed = boss.telegraphedSkill;
+          if (telegraphed != null) seen.add(telegraphed);
+        }
+        expect(seen, anyOf(isEmpty, equals({assigned})),
+            reason: 'seed $seed: 부여된 스킬 외에는 시전하지 않아야 한다');
+      }
+    });
+
+    test('회복 스킬: 남은 층수가 +3 되고 이미 벗긴 진행은 유지된다', () {
       final controller = spawnedBoss(healOnly);
       final boss = controller.shapes.firstWhere((s) => s.isBoss);
       boss.clearedLayers = 2; // 진행 상황을 흉내낸다.
@@ -375,16 +402,17 @@ void main() {
 
       controller.update(healOnly.telegraphMax); // 텔레그래프를 확실히 끝낸다.
 
-      expect(boss.remainingLayers, remainingBefore + healOnly.healLayerBonus);
+      expect(healOnly.healLayerBonus, 3);
+      expect(boss.remainingLayers, remainingBefore + 3);
       expect(boss.clearedLayers, 2, reason: '이미 벗긴 진행은 유지된다');
-      expect(boss.healUsed, isTrue);
       expect(boss.isTelegraphing, isFalse);
     });
 
-    test('회복은 개체당 최대 1회만 사용된다', () {
+    test('스킬은 개체당 최대 2회까지만 사용된다', () {
       const fastHeal = BossTraits(
         skillWeights: {BossSkillType.heal: 1, BossSkillType.haste: 0},
         skillInterval: Duration(milliseconds: 100),
+        postCastCooldown: Duration(milliseconds: 100),
         telegraphMin: Duration(milliseconds: 50),
         telegraphMax: Duration(milliseconds: 50),
       );
@@ -392,15 +420,37 @@ void main() {
       final boss = controller.shapes.firstWhere((s) => s.isBoss);
       final layersBefore = boss.layers.length;
 
-      // 스킬 사이클을 여러 번 흘려보낸다 — 계속 heal만 뽑히더라도
-      // 두 번째부터는 후보에서 빠져야 한다.
-      for (int i = 0; i < 20; i++) {
+      // 넉넉하게 흘려보내도 2회를 넘겨 쓰지 않아야 한다.
+      for (int i = 0; i < 40; i++) {
         controller.update(const Duration(milliseconds: 200));
       }
 
-      expect(boss.healUsed, isTrue);
-      expect(boss.layers.length, layersBefore + fastHeal.healLayerBonus,
-          reason: '회복이 두 번 이상 적용됐다면 레이어 수가 더 늘었을 것이다');
+      expect(fastHeal.maxSkillUses, 2);
+      expect(boss.skillUsesRemaining, 0);
+      expect(boss.canUseSkill, isFalse);
+      expect(boss.layers.length, layersBefore + fastHeal.healLayerBonus * 2,
+          reason: '회복이 정확히 2회만 적용되어야 한다');
+    });
+
+    test('시전 후에는 기본 간격에 더해 3초 쿨다운이 붙는다', () {
+      expect(BossTraits.standard.postCastCooldown, const Duration(seconds: 3));
+
+      final controller = spawnedBoss(hasteOnly);
+      final boss = controller.shapes.firstWhere((s) => s.isBoss);
+
+      // 첫 시전을 끝낸다.
+      controller.update(hasteOnly.skillInterval);
+      controller.update(hasteOnly.telegraphMax);
+      expect(boss.isHasted, isTrue);
+
+      // 기본 간격만으로는 다음 텔레그래프가 시작되지 않는다.
+      controller.update(hasteOnly.skillInterval);
+      expect(boss.isTelegraphing, isFalse,
+          reason: '연속 시전 방지 쿨다운이 남아 있어야 한다');
+
+      // 추가 쿨다운까지 지나면 다시 시전 준비가 된다.
+      controller.update(hasteOnly.postCastCooldown);
+      expect(boss.isTelegraphing, isTrue);
     });
 
     test('가속 스킬: 낙하 속도가 대폭 빨라지고, 끝나면 원래대로 돌아온다', () {
@@ -512,11 +562,11 @@ void main() {
       }
     });
 
-    test('체크포인트 7은 동시 등장 상한이 1.5배', () {
+    test('체크포인트 7은 동시 등장 상한이 2배', () {
       final raid5 =
           RunPresets.raidCheckpoints.firstWhere((c) => c.id == 'raid_5');
       expect(raid5.simultaneousShapesScale, 1.0);
-      expect(raid7().simultaneousShapesScale, 1.5);
+      expect(raid7().simultaneousShapesScale, 2.0);
 
       final params = DifficultyTable.paramsFor(10);
       expect(params.maxSimultaneousShapes,
@@ -527,8 +577,8 @@ void main() {
           _controllerFor(raid7()).effectiveMaxSimultaneousShapes(params);
 
       expect(base, DifficultyTable.simultaneousShapesCap);
-      expect(boosted, (base * 1.5).round());
-      expect(boosted, 9);
+      expect(boosted, base * 2);
+      expect(boosted, 12);
     });
 
     test('작은 변형 도형이 섞여 나온다', () {
@@ -1054,6 +1104,143 @@ void main() {
       controller.update(const Duration(milliseconds: 16));
 
       expect(controller.status, GameStatus.cleared);
+    });
+  });
+
+  group('레이어 조합', () {
+    test('같은 도형끼리의 조합도 허용된다 (동일 타입 금지 필터 제거)', () {
+      // 여러 시드로 2층 도형을 많이 만들어 보면, 같은 이름이 연달아
+      // 나오는 조합이 반드시 섞여 나와야 한다.
+      var sawSamePair = false;
+      for (int seed = 0; seed < 30 && !sawSamePair; seed++) {
+        final controller = GameController(
+          runConfig: RunPresets.specialStage,
+          random: math.Random(seed),
+        )..setFieldSize(const Size(400, 500));
+
+        for (int i = 0; i < 60; i++) {
+          controller.update(const Duration(milliseconds: 50));
+        }
+        for (final s in controller.shapes.where((s) => s.layers.length >= 2)) {
+          for (int i = 0; i < s.layers.length - 1; i++) {
+            if (s.layers[i] == s.layers[i + 1]) sawSamePair = true;
+          }
+        }
+      }
+      expect(sawSamePair, isTrue,
+          reason: '인접 레이어가 같은 조합이 한 번도 안 나오면 필터가 남아 있는 것');
+    });
+  });
+
+  group('스킬 배경 연출', () {
+    test('스킬이 꺼져 있으면 연출도 없다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.update(const Duration(milliseconds: 16));
+      expect(controller.skillOverlay, isNull);
+    });
+
+    test('더블클리어를 켜면 해당 연출이 뜨고 끄면 사라진다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1),
+        _shape(['circle'], id: 2),
+        _shape(['circle'], id: 3),
+      ]);
+      _draw(controller, 'circle');
+      controller.toggleSkill();
+      controller.update(const Duration(milliseconds: 16));
+
+      expect(controller.skillOverlay, SkillOverlayKind.doubleClear);
+
+      controller.toggleSkill();
+      controller.update(const Duration(milliseconds: 16));
+      expect(controller.skillOverlay, isNull);
+    });
+
+    test('레이어 제거는 즉시 발동형이라 1초만 표시된다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      // 레이어 제거 게이지를 채운다.
+      final needed = (1 / GameController.layerBreakGainPerClear).ceil();
+      for (int i = 0; i < needed; i++) {
+        controller.shapes.add(_shape(['circle'], id: 4000 + i));
+        _draw(controller, 'circle');
+        controller.update(const Duration(milliseconds: 200));
+      }
+      controller.shapes
+        ..clear()
+        ..add(_shape(['circle', 'circle'], id: 1));
+
+      controller.activateLayerBreak();
+      controller.update(const Duration(milliseconds: 16));
+      expect(controller.skillOverlay, SkillOverlayKind.layerBreak);
+
+      controller.update(GameController.layerBreakOverlayDuration);
+      expect(controller.skillOverlay, isNull);
+      expect(GameController.layerBreakOverlayDuration,
+          const Duration(seconds: 1));
+    });
+
+    test('연출이 이어지는 동안 경과 시간이 누적되고, 바뀌면 0부터 다시 센다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1),
+        _shape(['circle'], id: 2),
+        _shape(['circle'], id: 3),
+      ]);
+      _draw(controller, 'circle');
+      controller.toggleSkill();
+
+      controller.update(const Duration(milliseconds: 100));
+      expect(controller.skillOverlayElapsed, Duration.zero,
+          reason: '연출이 시작된 프레임에는 0');
+      controller.update(const Duration(milliseconds: 100));
+      expect(controller.skillOverlayElapsed,
+          const Duration(milliseconds: 100));
+    });
+
+    test('스킬마다 서로 다른 두 색이 정의되어 있다', () {
+      for (final kind in SkillOverlayKind.values) {
+        final colors = SkillFrameOverlay.palette[kind];
+        expect(colors, isNotNull, reason: '$kind 색이 없다');
+        expect(colors!.$1, isNot(equals(colors.$2)),
+            reason: '$kind는 번갈아 표시할 두 색이 달라야 한다');
+      }
+      // 스킬끼리도 계열이 겹치지 않아야 한다.
+      final firsts =
+          SkillOverlayKind.values.map((k) => SkillFrameOverlay.palette[k]!.$1);
+      expect(firsts.toSet().length, SkillOverlayKind.values.length);
+    });
+
+    test('가장 안쪽 프레임은 화면의 약 60%의 2% 크기다', () {
+      expect(SkillFrameOverlay.innermostScale, closeTo(0.6 * 0.02, 1e-9));
+    });
+  });
+
+  group('라이프 경고 배경', () {
+    test('라이프가 1 남으면 켜지고, 그보다 많으면 꺼진다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      expect(controller.lives, 5);
+      expect(controller.isLowLife, isFalse);
+
+      // 라이프가 1이 될 때까지 도형을 흘려보낸다.
+      while (controller.lives > 1 &&
+          controller.status == GameStatus.playing) {
+        controller.shapes.add(_shape(['circle'], id: 5000, y: 10000));
+        controller.update(const Duration(milliseconds: 16));
+      }
+
+      expect(controller.lives, 1);
+      expect(controller.isLowLife, isTrue);
+    });
+
+    test('게임 오버 상태에서는 켜지지 않는다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      while (controller.status == GameStatus.playing) {
+        controller.shapes.add(_shape(['circle'], id: 5100, y: 10000));
+        controller.update(const Duration(milliseconds: 16));
+      }
+      expect(controller.status, GameStatus.gameOver);
+      expect(controller.isLowLife, isFalse);
     });
   });
 

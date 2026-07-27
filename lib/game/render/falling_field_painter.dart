@@ -50,13 +50,16 @@ class FallingFieldPainter extends CustomPainter {
 
       // 클리어는 바깥부터 진행되므로 남아 있는 가장 바깥 레이어부터 그리고,
       // 안쪽(index 작은 쪽)을 나중에 그려야 위에 보인다.
+      // 삼각형이 감싸고 있으면 그 안쪽 레이어들은 조금 위로 올려 그린다.
+      double offsetY = 0;
       for (int i = shape.outermostRemainingIndex; i >= 0; i--) {
         final scale = layerScale(i, layerCount) * introScale;
+        final layerSize = shape.size * scale;
         final path = buildShapePath(
           shape.layers[i],
           shape.x,
-          shape.y,
-          shape.size * scale,
+          shape.y + offsetY,
+          layerSize,
         );
         final color = shape.isFlashing
             ? Colors.white
@@ -64,6 +67,9 @@ class FallingFieldPainter extends CustomPainter {
         paint.color =
             introAlpha >= 1 ? color : color.withValues(alpha: introAlpha);
         canvas.drawPath(path, paint);
+
+        // 이 레이어가 감싸는 다음(안쪽) 레이어에 누적 적용된다.
+        offsetY += innerLayerOffsetY(shape.layers[i], layerSize);
       }
     }
   }
