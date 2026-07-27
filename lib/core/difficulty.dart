@@ -204,6 +204,10 @@ class RunConfig {
   /// 보스 등장 형태. [bossFromDifficulty]가 null이면 의미 없다.
   final BossKind bossKind;
 
+  /// 스테이지 모드의 몇 단계인지(1~20). 레이드·특별 스테이지는 null.
+  /// 순차 해금과 클리어 기록에 쓰인다.
+  final int? stageNumber;
+
   /// 보스가 사용하는 스킬 성향. [bossFromDifficulty]가 null이면 의미 없다.
   final BossTraits bossTraits;
 
@@ -225,6 +229,7 @@ class RunConfig {
     this.bossFromDifficulty,
     this.bossKind = BossKind.single,
     this.bossTraits = BossTraits.standard,
+    this.stageNumber,
     this.simultaneousShapesScale = 1.0,
     this.isRaidMode = false,
     this.theme,
@@ -249,54 +254,73 @@ class RunPresets {
   /// 공통 시작 라이프. (Phase 2에서 3 -> 5로 변경)
   static const startLives = 5;
 
-  static const stage1 = RunConfig(
-    id: 'stage_1',
-    minDifficulty: 1,
-    maxDifficulty: 3,
-    duration: stageDuration,
-    startLives: startLives,
+  /// 스테이지 총 단계 수.
+  static const int stageCount = 20;
+
+  /// 다층 도형이 섞여 나오기 시작하는 단계.
+  static const int multiLayerFromStage = 4;
+
+  /// 단일 보스가 등장하는 단계.
+  static const int singleBossStage = 5;
+
+  /// 쌍둥이 보스가 등장하는 단계.
+  static const int twinBossStage = 10;
+
+  /// 1~20단계 전체. 난이도 구간은 1씩 슬라이딩한다(N단계 = N ~ N+2).
+  ///
+  /// 11단계부터는 구간 자체는 계속 올라가지만 [DifficultyTable]이 레벨
+  /// 10에서 값을 캡하므로 실질 난이도는 레벨 10이 유지된다. 즉 후반부는
+  /// 난이도 상승이 아니라 반복 숙련 구간이다.
+  static final List<RunConfig> stages = List.unmodifiable(
+    List.generate(stageCount, (i) => stageAt(i + 1)),
   );
 
-  static const stage2 = RunConfig(
-    id: 'stage_2',
-    minDifficulty: 2,
-    maxDifficulty: 4,
-    duration: stageDuration,
-    startLives: startLives,
-  );
+  /// [stage]단계(1-based)의 실행 설정을 만든다.
+  static RunConfig stageAt(int stage) {
+    assert(stage >= 1 && stage <= stageCount);
 
-  static const stage3 = RunConfig(
-    id: 'stage_3',
-    minDifficulty: 3,
-    maxDifficulty: 5,
-    duration: stageDuration,
-    startLives: startLives,
-  );
+    final isTwinBoss = stage == twinBossStage;
+    final isSingleBoss = stage == singleBossStage;
+    final hasMultiLayer = stage >= multiLayerFromStage;
 
-  /// 다층 도형이 등장하는 4단계.
-  static const stage4 = RunConfig(
-    id: 'stage_4',
-    minDifficulty: 4,
-    maxDifficulty: 6,
-    duration: stageDuration,
-    startLives: startLives,
-    maxLayers: 2,
-    multiLayerChance: 0.35,
-  );
+    // 다층 도형 확률은 등장 단계부터 마지막 단계까지 완만하게 올라간다.
+    final multiLayerProgress = hasMultiLayer
+        ? (stage - multiLayerFromStage) / (stageCount - multiLayerFromStage)
+        : 0.0;
+
+    return RunConfig(
+      id: 'stage_$stage',
+      stageNumber: stage,
+      minDifficulty: stage.toDouble(),
+      maxDifficulty: stage + 2.0,
+      // 쌍둥이 보스전은 시간 제한 없이 두 보스를 모두 잡아야 끝난다.
+      duration: isTwinBoss ? null : stageDuration,
+      startLives: startLives,
+      maxLayers: hasMultiLayer ? 2 : 1,
+      multiLayerChance:
+          hasMultiLayer ? 0.25 + 0.35 * multiLayerProgress : 0.0,
+      bossFromDifficulty: isSingleBoss
+          ? bossDifficulty
+          : (isTwinBoss ? twinBossStage.toDouble() : null),
+      bossKind: isTwinBoss ? BossKind.twin : BossKind.single,
+      bossTraits: isTwinBoss ? BossTraits.twin : BossTraits.standard,
+    );
+  }
+
+  static RunConfig get stage1 => stages[0];
+  static RunConfig get stage2 => stages[1];
+  static RunConfig get stage3 => stages[2];
+
+  /// 다층 도형이 등장하기 시작하는 4단계.
+  static RunConfig get stage4 => stages[3];
 
   /// 보스가 처음 등장하는 5단계.
-  static const stage5 = RunConfig(
-    id: 'stage_5',
-    minDifficulty: 5,
-    maxDifficulty: 7,
-    duration: stageDuration,
-    startLives: startLives,
-    maxLayers: 2,
-    multiLayerChance: 0.35,
-    bossFromDifficulty: bossDifficulty,
-  );
+  static RunConfig get stage5 => stages[singleBossStage - 1];
 
   /// 다층 도형만 나오는 특별 스테이지(2층, 보스 없음).
+  ///
+  /// MVP 범위에서 빠져 UI에는 노출하지 않는다. 나중에 하위 기믹 콘텐츠를
+  /// 다시 검토할 때 쓰려고 프리셋만 남겨둔 상태다.
   static const specialStage = RunConfig(
     id: 'stage_special',
     minDifficulty: 3,
@@ -309,17 +333,7 @@ class RunPresets {
 
   /// 쌍둥이 보스 스테이지(10단계).
   /// 시간 제한 없이 두 보스를 모두 제거해야 클리어된다.
-  static const stage10 = RunConfig(
-    id: 'stage_10',
-    minDifficulty: 10,
-    maxDifficulty: 10,
-    duration: null,
-    startLives: startLives,
-    bossFromDifficulty: 10,
-    bossKind: BossKind.twin,
-    bossTraits: BossTraits.twin,
-    theme: StageTheme.accelerationLine,
-  );
+  static RunConfig get stage10 => stages[twinBossStage - 1];
 
   /// 스테이지 모드에서 보스가 처음 등장하는 난이도.
   static const double bossDifficulty = 5;

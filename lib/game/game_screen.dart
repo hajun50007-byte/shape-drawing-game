@@ -6,6 +6,7 @@ import 'model/equipped_skills.dart';
 import 'render/falling_field_painter.dart';
 import 'render/skill_frame_overlay.dart';
 import 'state/game_controller.dart';
+import 'state/unlock_state.dart';
 import 'widgets/drawing_pad.dart';
 import 'widgets/game_hud.dart';
 import 'widgets/game_overlays.dart';
@@ -38,6 +39,9 @@ class _GameScreenState extends State<GameScreen>
   late final Ticker _ticker;
   Duration _lastElapsed = Duration.zero;
 
+  /// 이번 판의 클리어를 이미 기록했는지.
+  bool _clearRecorded = false;
+
   @override
   void initState() {
     super.initState();
@@ -59,6 +63,23 @@ class _GameScreenState extends State<GameScreen>
     final dt = elapsed - _lastElapsed;
     _lastElapsed = elapsed;
     _controller.update(dt);
+    _recordClearIfNeeded();
+  }
+
+  /// 스테이지를 클리어하면 다음 단계가 열리도록 진행도를 기록한다.
+  /// 한 판에 한 번만 기록하며, 다시 하기로 재시작하면 다시 기록할 수 있다.
+  void _recordClearIfNeeded() {
+    final stage = widget.runConfig.stageNumber;
+    if (stage == null) return;
+
+    if (_controller.status != GameStatus.cleared) {
+      // 재시작하면 다음 클리어를 다시 기록할 수 있게 초기화한다.
+      _clearRecorded = false;
+      return;
+    }
+    if (_clearRecorded) return;
+    _clearRecorded = true;
+    UnlockState.instance.markStageCleared(stage);
   }
 
   @override

@@ -69,6 +69,8 @@ class ShapeParticle extends TimedEffect {
 class ShapeSparkle extends TimedEffect {
   ShapeSparkle({
     required this.shapeName,
+    required this.centerX,
+    required this.centerY,
     required this.miniSize,
     required this.clusters,
     required this.blinkInterval,
@@ -77,6 +79,12 @@ class ShapeSparkle extends TimedEffect {
   });
 
   final String shapeName;
+
+  /// 이 반짝임이 퍼져 나가는 중심. 새 반짝임을 겹치지 않게 배치할 때
+  /// 기존 반짝임들과의 거리를 재는 기준점이다.
+  final double centerX;
+  final double centerY;
+
   final double miniSize;
 
   /// 각 지점의 미니 도형 3개 좌표(가상 삼각형 꼭짓점).

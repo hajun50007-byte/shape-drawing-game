@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/difficulty.dart';
 import 'loadout_screen.dart';
+import 'state/unlock_state.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -11,51 +12,43 @@ class HomeScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: const Color(0xFF10131A),
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 360),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    '도형 그리기 게임',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
+        // 진행도가 바뀌면(스테이지 클리어) 잠금 표시가 즉시 갱신되도록 구독.
+        child: AnimatedBuilder(
+          animation: UnlockState.instance,
+          builder: (context, _) => Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      '도형 그리기 게임',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '떨어지는 도형과 같은 모양을 아래 패드에 그려서 없애보세요.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                  const SizedBox(height: 32),
-                  const _SectionLabel('스테이지 모드'),
-                  const _ModeButton(label: '1단계', config: RunPresets.stage1),
-                  const _ModeButton(label: '2단계', config: RunPresets.stage2),
-                  const _ModeButton(label: '3단계', config: RunPresets.stage3),
-                  const _ModeButton(label: '4단계 · 다층', config: RunPresets.stage4),
-                  const _ModeButton(
-                      label: '5단계 · 보스 등장', config: RunPresets.stage5),
-                  const _ModeButton(
-                      label: '10단계 · 쌍둥이 보스', config: RunPresets.stage10),
-                  const SizedBox(height: 24),
-                  const _SectionLabel('특별 스테이지'),
-                  const _ModeButton(
-                      label: '다층 도형 집중 · 2층',
-                      config: RunPresets.specialStage),
-                  const SizedBox(height: 24),
-                  const _SectionLabel('레이드 모드'),
-                  for (final config in RunPresets.raidCheckpoints)
-                    _ModeButton(
-                      label: '${config.minDifficulty.round()}단계 체크포인트',
-                      config: config,
+                    const SizedBox(height: 8),
+                    const Text(
+                      '떨어지는 도형과 같은 모양을 아래 패드에 그려서 없애보세요.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70),
                     ),
-                ],
+                    const SizedBox(height: 32),
+                    const _SectionLabel('스테이지 모드'),
+                    const _StageGrid(),
+                    const SizedBox(height: 24),
+                    const _SectionLabel('레이드 모드'),
+                    for (final config in RunPresets.raidCheckpoints)
+                      _RaidButton(
+                        label: '${config.minDifficulty.round()}단계 체크포인트',
+                        config: config,
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -83,8 +76,98 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-class _ModeButton extends StatelessWidget {
-  const _ModeButton({required this.label, required this.config});
+/// 1~20단계 타일. 아직 열리지 않은 단계는 회색조 + 자물쇠로 구분한다.
+class _StageGrid extends StatelessWidget {
+  const _StageGrid();
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final config in RunPresets.stages)
+          _StageTile(
+            stage: config.stageNumber!,
+            config: config,
+            unlocked: UnlockState.instance.isStageUnlocked(config.stageNumber!),
+          ),
+      ],
+    );
+  }
+}
+
+class _StageTile extends StatelessWidget {
+  const _StageTile({
+    required this.stage,
+    required this.config,
+    required this.unlocked,
+  });
+
+  final int stage;
+  final RunConfig config;
+  final bool unlocked;
+
+  bool get _isBossStage => config.bossFromDifficulty != null;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _isBossStage ? Colors.purpleAccent : Colors.white70;
+    final borderColor = unlocked ? accent : Colors.white12;
+
+    return SizedBox(
+      width: 62,
+      height: 62,
+      child: Material(
+        color: unlocked
+            ? (_isBossStage
+                ? Colors.purple.withValues(alpha: 0.18)
+                : Colors.white10)
+            : Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: unlocked
+              ? () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => LoadoutScreen(runConfig: config),
+                    ),
+                  );
+                }
+              : null,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: borderColor),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (!unlocked)
+                  const Icon(Icons.lock, size: 16, color: Colors.white24)
+                else if (_isBossStage)
+                  const Icon(Icons.whatshot, size: 14, color: Colors.purpleAccent),
+                const SizedBox(height: 2),
+                Text(
+                  '$stage',
+                  style: TextStyle(
+                    color: unlocked ? Colors.white : Colors.white24,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RaidButton extends StatelessWidget {
+  const _RaidButton({required this.label, required this.config});
 
   final String label;
   final RunConfig config;

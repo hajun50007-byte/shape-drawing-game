@@ -10,7 +10,7 @@ void main() {
   tearDown(() => UnlockState.instance.resetForTest());
 
   Future<void> pump(WidgetTester tester) async {
-    await tester.pumpWidget(const MaterialApp(
+    await tester.pumpWidget(MaterialApp(
       home: LoadoutScreen(runConfig: RunPresets.stage1),
     ));
   }

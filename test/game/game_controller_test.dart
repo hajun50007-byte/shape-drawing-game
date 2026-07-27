@@ -664,6 +664,8 @@ void main() {
     test('반짝임은 뚝 끊기지 않고 켜질 때마다 점점 흐려진다', () {
       final sparkle = ShapeSparkle(
         shapeName: 'circle',
+        centerX: 0,
+        centerY: 0,
         miniSize: 10,
         clusters: const [],
         blinkInterval: const Duration(milliseconds: 100),
@@ -685,6 +687,75 @@ void main() {
       // 뒤로 갈수록(마지막 깜빡임일수록) 더 흐려진다.
       expect(third, lessThan(second));
       expect(second, lessThan(1.0));
+    });
+
+    test('같은 자리에서 터져도 반짝임 중심이 서로 최소 간격만큼 떨어진다', () {
+      // 정확히 같은 좌표의 도형을 연달아 없애도, 두 번째 반짝임은
+      // 첫 번째와 겹치지 않게 밀려나야 한다.
+      List<ShapeSparkle> sparklesFromSeed(int seed) {
+        final controller = GameController(
+          runConfig: RunPresets.stage1,
+          random: math.Random(seed),
+        )..setFieldSize(const Size(400, 500));
+        for (int i = 0; i < 6; i++) {
+          controller.shapes.add(_shape(['circle'], id: 6000 + i, y: 200));
+          _draw(controller, 'circle');
+        }
+        return controller.sparkles;
+      }
+
+      var checkedAnyPair = false;
+      for (int seed = 0; seed < 12; seed++) {
+        final sparkles = sparklesFromSeed(seed);
+        if (sparkles.length < 2) continue;
+        checkedAnyPair = true;
+
+        final minGap = GameController.shapeSize *
+            GameController.sparkleMinSpacingFactor;
+        for (int i = 0; i < sparkles.length; i++) {
+          for (int j = i + 1; j < sparkles.length; j++) {
+            final dx = sparkles[i].centerX - sparkles[j].centerX;
+            final dy = sparkles[i].centerY - sparkles[j].centerY;
+            final gap = math.sqrt(dx * dx + dy * dy);
+            expect(gap, greaterThanOrEqualTo(minGap - 1e-6),
+                reason: 'seed $seed: 반짝임 $i-$j가 너무 가깝다');
+          }
+        }
+      }
+      expect(checkedAnyPair, isTrue, reason: '비교할 반짝임 쌍이 하나도 없었다');
+    });
+
+    test('한 반짝임 안에서도 지점끼리 최소 간격을 둔다', () {
+      ShapeSparkle? sparkle;
+      for (int seed = 0; seed < 20 && sparkle == null; seed++) {
+        final controller = GameController(
+          runConfig: RunPresets.stage1,
+          random: math.Random(seed),
+        )..setFieldSize(const Size(400, 500));
+        controller.shapes.add(_shape(['circle']));
+        _draw(controller, 'circle');
+        if (controller.sparkles.isNotEmpty) sparkle = controller.sparkles.first;
+      }
+      expect(sparkle, isNotNull);
+
+      // 각 지점의 중심은 삼각형 꼭짓점 3개의 평균으로 되돌릴 수 있다.
+      final centers = sparkle!.clusters.map((cluster) {
+        final cx =
+            cluster.map((p) => p.x).reduce((a, b) => a + b) / cluster.length;
+        final cy =
+            cluster.map((p) => p.y).reduce((a, b) => a + b) / cluster.length;
+        return (cx, cy);
+      }).toList();
+
+      // 완전히 겹치는 지점은 없어야 한다(재시도 상한 때문에 최소 간격을
+      // 항상 보장하진 못하므로, 뭉침이 없다는 선까지만 확인한다).
+      for (int i = 0; i < centers.length; i++) {
+        for (int j = i + 1; j < centers.length; j++) {
+          final dx = centers[i].$1 - centers[j].$1;
+          final dy = centers[i].$2 - centers[j].$2;
+          expect(math.sqrt(dx * dx + dy * dy), greaterThan(1.0));
+        }
+      }
     });
 
     test('동시에 존재하는 파티클/반짝임/버스트 개수에 상한이 있다', () {

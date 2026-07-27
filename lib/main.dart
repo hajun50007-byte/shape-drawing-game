@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 
 import 'game/home_screen.dart';
+import 'game/state/unlock_state.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // 저장된 스테이지 진행도·스킬 해금 상태를 먼저 읽어온다.
+  await UnlockState.instance.load();
   runApp(const ShapeDrawingGameApp());
 }
 

@@ -128,6 +128,17 @@ class GameController extends ChangeNotifier {
   static const Duration sparkleBlinkInterval = Duration(milliseconds: 100);
   static const int sparkleBlinkCount = 3;
 
+  /// 한 반짝임 안에서 지점끼리 최소로 떨어져야 하는 거리(도형 크기 대비).
+  /// 지점이 서로 겹쳐 뭉치면 폭죽이 아니라 얼룩처럼 보인다.
+  static const double sparkleMinClusterSpacingFactor = 0.30;
+
+  /// 서로 다른 반짝임끼리 최소로 떨어져야 하는 거리(도형 크기 대비).
+  /// 같은 자리에서 여러 도형이 터질 때 연출이 뭉치는 걸 막는다.
+  static const double sparkleMinSpacingFactor = 0.85;
+
+  /// 겹침을 피해 위치를 다시 뽑아보는 최대 횟수.
+  static const int effectPlacementAttempts = 12;
+
   /// 여러 이펙트가 겹쳐 화면이 어지러워지지 않도록 동시 존재 개수에
   /// 상한을 둔다. 넘치면 가장 오래된 것부터 제거한다.
   static const int maxConcurrentParticles = particlesPerShape * 4;
@@ -901,20 +912,42 @@ class GameController extends ChangeNotifier {
 
   /// 도형 반경 주변 3~4개 지점에, 각 지점마다 미니 도형 3개를 가상
   /// 삼각형 꼭짓점 위치로 배치한다.
+  ///
+  /// 겹쳐 보이는 걸 줄이기 위해 두 단계로 간격을 둔다:
+  /// 1. 이미 떠 있는 다른 반짝임과 너무 가까우면 중심을 밀어낸다.
+  /// 2. 한 반짝임 안에서도 지점끼리 최소 간격을 두고 뽑는다.
   void _spawnSparkle(FallingShape shape) {
     final clusterCount = sparkleMinClusters +
         _random.nextInt(sparkleMaxClusters - sparkleMinClusters + 1);
     final spread = shape.size * sparkleSpreadFactor;
     final triangleRadius = shape.size * sparkleTriangleRadiusFactor;
+    final minClusterGap = shape.size * sparkleMinClusterSpacingFactor;
+
+    final center = _separatedSparkleCenter(shape);
+    final centerX = center.$1;
+    final centerY = center.$2;
+
+    final clusterCenters = <(double, double)>[];
+    for (int c = 0; c < clusterCount; c++) {
+      (double, double)? placed;
+      for (int attempt = 0; attempt < effectPlacementAttempts; attempt++) {
+        final angle = _random.nextDouble() * 2 * math.pi;
+        final distance = spread * (0.35 + _random.nextDouble() * 0.65);
+        final candidate = (
+          centerX + math.cos(angle) * distance,
+          centerY + math.sin(angle) * distance,
+        );
+        placed = candidate;
+        final tooClose = clusterCenters.any((existing) =>
+            _distance(existing.$1, existing.$2, candidate.$1, candidate.$2) <
+            minClusterGap);
+        if (!tooClose) break;
+      }
+      clusterCenters.add(placed!);
+    }
 
     final clusters = <List<SparklePoint>>[];
-    for (int c = 0; c < clusterCount; c++) {
-      // 도형 주변 무작위 위치.
-      final angle = _random.nextDouble() * 2 * math.pi;
-      final distance = spread * (0.35 + _random.nextDouble() * 0.65);
-      final cx = shape.x + math.cos(angle) * distance;
-      final cy = shape.y + math.sin(angle) * distance;
-
+    for (final (cx, cy) in clusterCenters) {
       // 가상 삼각형의 세 꼭짓점.
       final rotation = _random.nextDouble() * 2 * math.pi;
       clusters.add([
@@ -930,6 +963,8 @@ class GameController extends ChangeNotifier {
 
     sparkles.add(ShapeSparkle(
       shapeName: shape.layers.first,
+      centerX: centerX,
+      centerY: centerY,
       miniSize: shape.size * sparkleMiniSizeFactor,
       clusters: clusters,
       blinkInterval: sparkleBlinkInterval,
@@ -938,6 +973,50 @@ class GameController extends ChangeNotifier {
       duration: sparkleBlinkInterval * (sparkleBlinkCount * 2),
     ));
     _capList(sparkles, maxConcurrentSparkles);
+  }
+
+  /// 이미 떠 있는 반짝임들과 최소 간격을 확보한 중심 좌표를 고른다.
+  ///
+  /// 한 번만 밀어내면 A에서 멀어지다 B에 붙어버릴 수 있어, 더 밀어낼
+  /// 대상이 없을 때까지 반복해서 정리한다(반짝임 수가 상한으로 묶여
+  /// 있어 몇 번이면 수렴한다).
+  (double, double) _separatedSparkleCenter(FallingShape shape) {
+    final minGap = shape.size * sparkleMinSpacingFactor;
+    // 딱 최소 거리에 맞추면 부동소수점 오차로 다시 "가깝다"고 판정될 수
+    // 있어 아주 살짝 더 밀어낸다.
+    final targetGap = minGap * 1.001;
+
+    var x = shape.x;
+    var y = shape.y;
+
+    for (int pass = 0; pass < effectPlacementAttempts; pass++) {
+      var adjusted = false;
+      for (final other in sparkles) {
+        final gap = _distance(x, y, other.centerX, other.centerY);
+        if (gap >= minGap) continue;
+        adjusted = true;
+
+        if (gap < 1e-6) {
+          // 정확히 같은 자리면 방향이 없으니 임의 방향으로 밀어낸다.
+          final angle = _random.nextDouble() * 2 * math.pi;
+          x += math.cos(angle) * targetGap;
+          y += math.sin(angle) * targetGap;
+          continue;
+        }
+        // 겹치는 만큼만 바깥으로 밀어낸다.
+        final push = (targetGap - gap) / gap;
+        x += (x - other.centerX) * push;
+        y += (y - other.centerY) * push;
+      }
+      if (!adjusted) break;
+    }
+    return (x, y);
+  }
+
+  static double _distance(double x1, double y1, double x2, double y2) {
+    final dx = x1 - x2;
+    final dy = y1 - y2;
+    return math.sqrt(dx * dx + dy * dy);
   }
 
   void _spawnParticles(FallingShape shape) {
