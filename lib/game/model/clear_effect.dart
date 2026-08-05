@@ -128,7 +128,12 @@ class ScorePopup extends TimedEffect {
     required this.riseDistance,
     required super.duration,
     this.label,
+    this.startDelay = Duration.zero,
   });
+
+  /// 뜨기까지 기다리는 시간. 콤보에서 아래 도형부터 차례로 뜨게 하는 데
+  /// 쓴다. 이 시간이 지나기 전에는 그리지 않는다.
+  final Duration startDelay;
 
   final double startX;
   final double startY;
@@ -140,6 +145,23 @@ class ScorePopup extends TimedEffect {
   /// 수명 동안 위로 떠오르는 총 거리(px).
   final double riseDistance;
 
+  /// 아직 뜰 차례가 안 됐는지.
+  bool get isWaiting => elapsed < startDelay;
+
+  /// 지연을 뺀 실제 진행도 0~1.
+  double get _activeProgress {
+    final active = elapsed - startDelay;
+    if (active <= Duration.zero) return 0;
+    if (duration <= Duration.zero) return 1;
+    return (active.inMicroseconds / duration.inMicroseconds).clamp(0.0, 1.0);
+  }
+
   double get x => startX;
-  double get y => startY - riseDistance * progress;
+  double get y => startY - riseDistance * _activeProgress;
+
+  /// 표시 불투명도. 대기 중에는 0이고, 뜬 뒤 서서히 사라진다.
+  double get alpha => isWaiting ? 0 : (1 - _activeProgress).clamp(0.0, 1.0);
+
+  @override
+  bool get isDone => elapsed >= startDelay + duration;
 }

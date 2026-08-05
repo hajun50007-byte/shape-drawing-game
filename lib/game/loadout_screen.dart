@@ -81,7 +81,7 @@ class _LoadoutScreenState extends State<LoadoutScreen> {
                   _SkillCard(
                     title: '더블클리어',
                     description: '토글로 켜두면 성공할 때마다 다른 그룹도 함께 클리어',
-                    color: SkillVisuals.of(ActiveSkill.doubleClear).accent,
+                    color: SkillVisuals.accentOf(ActiveSkill.doubleClear),
                     selected: _doubleClear,
                     locked: false,
                     interactive: unlocked,
@@ -91,7 +91,7 @@ class _LoadoutScreenState extends State<LoadoutScreen> {
                   _SkillCard(
                     title: '레이어 제거',
                     description: '화면의 모든 도형에서 바깥 레이어를 한 겹씩 벗김',
-                    color: SkillVisuals.of(ActiveSkill.layerBreak).accent,
+                    color: SkillVisuals.accentOf(ActiveSkill.layerBreak),
                     selected: _layerBreak,
                     locked: false,
                     interactive: unlocked,
@@ -101,7 +101,7 @@ class _LoadoutScreenState extends State<LoadoutScreen> {
                   _SkillCard(
                     title: '타임 슬로우',
                     description: '몇 초간 화면의 모든 낙하 속도 감소',
-                    color: SkillVisuals.of(ActiveSkill.timeSlow).accent,
+                    color: SkillVisuals.accentOf(ActiveSkill.timeSlow),
                     selected: _timeSlow,
                     locked: !unlocked,
                     interactive: unlocked,

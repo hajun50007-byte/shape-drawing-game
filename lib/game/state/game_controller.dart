@@ -26,6 +26,7 @@ class GameController extends ChangeNotifier {
     required this.runConfig,
     math.Random? random,
     this.equipped = EquippedSkills.defaultLoadout,
+    this.doubleClearDelay = defaultDoubleClearDelay,
   }) : _random = random ?? math.Random() {
     final templates = ShapeTemplates.all;
     _recognizer = core.UnistrokeRecognizer(templates);
@@ -37,6 +38,9 @@ class GameController extends ChangeNotifier {
   /// 이 런에 장착된 액티브 스킬. 장착 안 한 스킬은 게이지가 차지 않고
   /// 발동도 되지 않는다.
   final EquippedSkills equipped;
+
+  /// 에코 프로토콜(더블클리어)의 재처치 딜레이. 업그레이드로 조정된다.
+  final Duration doubleClearDelay;
 
   // ---------------- 튜닝 상수 ----------------
 
@@ -114,6 +118,9 @@ class GameController extends ChangeNotifier {
   static const Duration scorePopupDuration = Duration(milliseconds: 700);
   static const double scorePopupRise = 46;
 
+  /// 콤보에서 개별 점수 팝업이 아래 도형부터 차례로 뜨는 간격.
+  static const Duration scorePopupStagger = Duration(milliseconds: 90);
+
   /// 크러쉬형 반짝임: 도형 주변에 만들 지점 수(최소~최대).
   static const int sparkleMinClusters = 3;
   static const int sparkleMaxClusters = 4;
@@ -168,8 +175,12 @@ class GameController extends ChangeNotifier {
   /// 절반으로 낮춘 값 — 계속 플레이하며 다시 조정할 튜닝 포인트다.
   static const double skillDrainPerSecond = 0.25;
 
-  /// 홀드 더블클리어에서 두 번째 클리어가 발동하기까지의 딜레이.
-  static const Duration doubleClearDelay = Duration(seconds: 1);
+  /// 에코 프로토콜(더블클리어) 기준 딜레이 — 처치 후 재처치까지의 간격.
+  /// 업그레이드로 짧아질 예정이라 생성자에서 덮어쓸 수 있게 열어 뒀다.
+  static const Duration defaultDoubleClearDelay = Duration(seconds: 2);
+
+  /// 업그레이드로 도달할 최단 딜레이(참고용 하한선).
+  static const Duration minDoubleClearDelay = Duration(milliseconds: 500);
 
   /// 라이프 감소 시 붉은 테두리 플래시가 사라지는 속도(초당).
   static const double damageFlashDecayPerSecond = 2.5;
@@ -412,7 +423,7 @@ class GameController extends ChangeNotifier {
     final affected = _clearMatching(target.activeName);
     if (affected.isEmpty) return;
 
-    final comboBonus = comboBonusFor(_doubleClearScore, affected.length);
+    final comboBonus = comboBonusFor(affected.length);
     _score += _doubleClearScore * affected.length + comboBonus;
     _chargeSkillGauges(affected);
     _spawnClearEffects(affected, _doubleClearScore, comboBonus);
@@ -828,7 +839,7 @@ class GameController extends ChangeNotifier {
 
     if (affected.isNotEmpty) {
       final perShape = result.score.round();
-      final comboBonus = comboBonusFor(perShape, affected.length);
+      final comboBonus = comboBonusFor(affected.length);
       _score += perShape * affected.length + comboBonus;
       _chargeSkillGauges(affected);
       _spawnClearEffects(affected, perShape, comboBonus);
@@ -861,31 +872,24 @@ class GameController extends ChangeNotifier {
     return affected;
   }
 
-  /// 도형 하나의 바깥 레이어를 한 겹 벗기고 플래시를 건다. 보스가 이걸로
-  /// 완전히 쓰러지면 해당 훅을 실행한다.
+  /// 도형 하나의 바깥 레이어를 한 겹 벗기고 플래시를 건다.
+  ///
+  /// 3번째 스킬 해금은 여기가 아니라 **스테이지 클리어** 시점에
+  /// [UnlockState.markStageCleared]에서 처리한다. 보스를 놓치고 제한
+  /// 시간으로 클리어해도 보상이 나와야 하기 때문이다.
   void _peelLayer(FallingShape shape) {
     shape.clearedLayers++;
     shape.flashRemaining = clearFlashDuration;
-    if (shape.isBoss && shape.isCleared) _onBossCleared(shape);
   }
 
-  /// 보스가 쓰러졌을 때의 훅. 지금은 5단계 보스 클리어 시 타임 슬로우
-  /// 해금에만 쓰인다.
-  void _onBossCleared(FallingShape boss) {
-    if (runConfig.id == RunPresets.stage5.id) {
-      UnlockState.instance.unlockTimeSlow();
-    }
-  }
+  /// 콤보 보너스 계수. 공식은 comboBonus(n) = [comboBonusFactor] × n × (n-1).
+  static const int comboBonusFactor = 5;
 
-  /// 동시 클리어 보너스 점수.
-  ///
-  /// 주의: 이전 버전에는 콤보 보너스 항목 자체가 없었고 총점이
-  /// (도형당 점수 × 개수)였다. 콤보 팝업을 별도로 띄우려면 보너스가
-  /// 실재해야 해서 여기서 처음 정의한다. 2개 이상 동시 클리어 시
-  /// 기본 획득분과 같은 양을 보너스로 더한다.
-  static int comboBonusFor(int perShapeScore, int clearedCount) {
+  /// 동시 클리어 보너스 점수. n(동시 클리어 개수)에 상한이 없다 —
+  /// n이 얼마나 커지든 같은 공식이 그대로 적용된다.
+  static int comboBonusFor(int clearedCount) {
     if (clearedCount < 2) return 0;
-    return perShapeScore * clearedCount;
+    return comboBonusFactor * clearedCount * (clearedCount - 1);
   }
 
   /// 콤보 하나에 대한 연출을 만든다.
@@ -901,13 +905,19 @@ class GameController extends ChangeNotifier {
 
     for (final shape in affected) {
       if (shape.isCleared) _spawnDestroyEffect(shape);
-      // 각 도형 위치에서 개별 점수가 떠오른다.
+    }
+
+    // 점수 팝업은 화면 맨 아래 도형부터 차례로 뜬다(y가 클수록 아래).
+    final byDepth = [...affected]..sort((a, b) => b.y.compareTo(a.y));
+    for (int order = 0; order < byDepth.length; order++) {
+      final shape = byDepth[order];
       scorePopups.add(ScorePopup(
         startX: shape.x,
         startY: shape.y,
         score: perShapeScore,
         riseDistance: scorePopupRise,
         duration: scorePopupDuration,
+        startDelay: scorePopupStagger * order,
       ));
     }
 
@@ -924,7 +934,8 @@ class GameController extends ChangeNotifier {
     }
 
     if (comboBonus > 0) {
-      // 콤보 보너스는 마지막 도형 위치에 한 번만 강조해서 띄운다.
+      // 콤보 보너스는 개별 팝업이 모두 뜬 뒤 마지막 도형 위치에 강조해서
+      // 한 번만 띄운다. 개수(n)에 상한이 없으므로 지연도 n에 맞춰 늘어난다.
       scorePopups.add(ScorePopup(
         startX: last.x,
         startY: last.y - scorePopupRise * 0.6,
@@ -932,6 +943,7 @@ class GameController extends ChangeNotifier {
         label: 'COMBO',
         riseDistance: scorePopupRise * 1.4,
         duration: scorePopupDuration,
+        startDelay: scorePopupStagger * affected.length,
       ));
     }
   }
@@ -1169,7 +1181,7 @@ class GameController extends ChangeNotifier {
 
     // 점수는 현재 난이도의 통과 기준을 획득 점수로 삼는다.
     final perShape = currentThreshold.round();
-    final comboBonus = comboBonusFor(perShape, affected.length);
+    final comboBonus = comboBonusFor(affected.length);
     _score += perShape * affected.length + comboBonus;
     _spawnClearEffects(affected, perShape, comboBonus);
 

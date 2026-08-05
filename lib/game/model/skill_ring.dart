@@ -47,6 +47,20 @@ class RingAnimation {
   /// 지금 프레임에서의 불투명도.
   double get alpha => exiting ? 1 - _progress : _progress;
 
+  /// [extra]만큼 더 흐른 뒤의 불투명도(예측값).
+  ///
+  /// 퇴장은 링마다 지연을 두고 시작하므로, 퇴장을 만들 때 "지금" 알파가
+  /// 아니라 "그 퇴장이 실제로 시작될 때" 알파에서 이어받아야 튀지 않는다.
+  double alphaAfter(Duration extra) {
+    if (fadeDuration <= Duration.zero) return exiting ? 0 : 1;
+    final active = elapsed + extra - startDelay;
+    final advanced = active <= Duration.zero
+        ? 0.0
+        : active.inMicroseconds / fadeDuration.inMicroseconds;
+    final progress = (startProgress + advanced).clamp(0.0, 1.0);
+    return exiting ? 1 - progress : progress;
+  }
+
   /// 퇴장이 끝나 목록에서 지워도 되는 상태인지.
   /// 등장은 끝나도 그대로 남아 링을 계속 채운다.
   bool get isFinished => exiting && _progress >= 1;
@@ -88,8 +102,9 @@ class SkillRing {
       startDelay: startDelay,
       fadeDuration: fadeDuration,
       exiting: true,
-      // 반쯤 나타난 상태였다면 그만큼 이미 사라진 것으로 쳐서 튀지 않게 한다.
-      startProgress: (1 - current.alpha).clamp(0.0, 1.0),
+      // 이 퇴장이 실제로 시작되는 시점의 등장 알파에서 이어받는다.
+      // (지연 동안 등장이 더 진행될 수 있으므로 "지금" 알파를 쓰면 튄다)
+      startProgress: (1 - current.alphaAfter(startDelay)).clamp(0.0, 1.0),
     ));
   }
 

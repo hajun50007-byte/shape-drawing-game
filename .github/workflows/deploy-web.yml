@@ -2,7 +2,9 @@ name: Deploy Web to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # main 외에 작업 브랜치도 배포한다 — 머지 전에 실기기(iPhone Safari)로
+    # 확인하기 위한 프리뷰 용도다. 확인이 끝나면 이 항목은 정리해도 된다.
+    branches: [main, claude/bg-effect-combo-fixes]
   workflow_dispatch:
 
 permissions:

@@ -112,32 +112,42 @@ class _GameScreenState extends State<GameScreen>
                       children: [
                         // 상단: 낙하 도형 표시 전용. GestureDetector가 없으므로
                         // 이 영역의 터치는 드로잉으로 처리되지 않는다.
-                        ClipRect(
-                          child: SizedBox(
-                            width: width,
-                            height: fieldHeight,
-                            child: CustomPaint(
-                              painter: FallingFieldPainter(
-                                shapes: _controller.shapes,
-                                background: theme.background,
-                                bursts: _controller.bursts,
-                                particles: _controller.particles,
-                                sparkles: _controller.sparkles,
-                                scorePopups: _controller.scorePopups,
-                                burstMaxScale: GameController.burstMaxScale,
+                        // 낙하 구역은 매 프레임 다시 그려지므로, 배경
+                        // 이펙트·HUD와 같은 레이어를 공유하지 않도록
+                        // 자체 레이어로 떼어낸다.
+                        RepaintBoundary(
+                          child: ClipRect(
+                            child: SizedBox(
+                              width: width,
+                              height: fieldHeight,
+                              child: CustomPaint(
+                                painter: FallingFieldPainter(
+                                  shapes: _controller.shapes,
+                                  background: theme.background,
+                                  bursts: _controller.bursts,
+                                  particles: _controller.particles,
+                                  sparkles: _controller.sparkles,
+                                  scorePopups: _controller.scorePopups,
+                                  burstMaxScale: GameController.burstMaxScale,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                        DrawingPad(
-                          width: width,
-                          height: padHeight,
-                          background: theme.padBackground,
-                          strokePoints: _controller.strokePoints,
-                          feedback: _controller.strokeFeedback,
-                          onStart: (p) => _controller.startStroke(p.dx, p.dy),
-                          onUpdate: (p) => _controller.extendStroke(p.dx, p.dy),
-                          onEnd: _controller.endStroke,
+                        // 궤적은 포인터가 움직일 때마다 갱신되므로 별도
+                        // 레이어로 격리해 낙하 구역까지 끌고 가지 않는다.
+                        RepaintBoundary(
+                          child: DrawingPad(
+                            width: width,
+                            height: padHeight,
+                            background: theme.padBackground,
+                            strokePoints: _controller.strokePoints,
+                            feedback: _controller.strokeFeedback,
+                            onStart: (p) => _controller.startStroke(p.dx, p.dy),
+                            onUpdate: (p) =>
+                                _controller.extendStroke(p.dx, p.dy),
+                            onEnd: _controller.endStroke,
+                          ),
                         ),
                       ],
                     ),
@@ -177,7 +187,7 @@ class _GameScreenState extends State<GameScreen>
                             isActive: _controller.isTimeSlowActive,
                             onPressed: _controller.activateTimeSlow,
                             accent:
-                                SkillVisuals.of(ActiveSkill.timeSlow).accent,
+                                SkillVisuals.accentOf(ActiveSkill.timeSlow),
                             activeAccent:
                                 SkillVisuals.activeAccentOf(ActiveSkill.timeSlow),
                           ),
@@ -190,7 +200,7 @@ class _GameScreenState extends State<GameScreen>
                             isReady: _controller.isLayerBreakReady,
                             onPressed: _controller.activateLayerBreak,
                             accent:
-                                SkillVisuals.of(ActiveSkill.layerBreak).accent,
+                                SkillVisuals.accentOf(ActiveSkill.layerBreak),
                             activeAccent: SkillVisuals.activeAccentOf(
                                 ActiveSkill.layerBreak),
                           ),
@@ -205,7 +215,7 @@ class _GameScreenState extends State<GameScreen>
                             isActive: _controller.isSkillActive,
                             onPressed: _controller.toggleSkill,
                             accent:
-                                SkillVisuals.of(ActiveSkill.doubleClear).accent,
+                                SkillVisuals.accentOf(ActiveSkill.doubleClear),
                             activeAccent: SkillVisuals.activeAccentOf(
                                 ActiveSkill.doubleClear),
                           ),

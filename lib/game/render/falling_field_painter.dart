@@ -141,16 +141,18 @@ class FallingFieldPainter extends CustomPainter {
   }
 
   /// 획득 점수가 위로 떠오르며 사라진다.
+  /// 콤보에서는 아래 도형부터 차례로 뜨므로, 아직 차례가 아닌 팝업은
+  /// 그리지 않는다.
   void _paintScorePopups(Canvas canvas) {
     for (final popup in scorePopups) {
-      final t = popup.progress;
+      if (popup.isWaiting) continue;
       final isCombo = popup.label != null;
       final painter = TextPainter(
         text: TextSpan(
           text: isCombo ? '+${popup.score} ${popup.label}' : '+${popup.score}',
           style: TextStyle(
             color: (isCombo ? Colors.amberAccent : Colors.white)
-                .withValues(alpha: (1 - t).clamp(0.0, 1.0)),
+                .withValues(alpha: popup.alpha),
             fontSize: isCombo ? 24 : 20,
             fontWeight: FontWeight.bold,
           ),

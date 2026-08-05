@@ -44,9 +44,17 @@ class UnlockState extends ChangeNotifier {
   /// 그 뒤로는 직전 단계를 깨야 열린다.
   bool isStageUnlocked(int stage) => stage <= _highestClearedStage + 1;
 
+  /// 타임 슬로우(3번째 액티브 스킬)가 지급되는 단계.
+  static const int timeSlowUnlockStage = 5;
+
   /// [stage]단계를 클리어했다고 기록한다. 이미 더 높은 단계를 깼다면
   /// 되돌리지 않는다(낮은 단계 재플레이로 진행도가 깎이지 않게).
+  ///
+  /// 이 단계가 [timeSlowUnlockStage] 이상이면 3번째 스킬도 함께 지급한다.
+  /// 보스를 직접 잡았는지가 아니라 **스테이지 클리어**가 조건이다 —
+  /// 보스를 놓치고 제한 시간으로 클리어해도 보상은 나와야 한다.
   Future<void> markStageCleared(int stage) async {
+    if (stage >= timeSlowUnlockStage) unlockTimeSlow();
     if (stage <= _highestClearedStage) return;
     _highestClearedStage = stage;
     notifyListeners();

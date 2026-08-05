@@ -251,13 +251,28 @@ void main() {
       final square = controller.shapes.firstWhere((s) => s.id == 5);
       expect(square.isCleared, isFalse, reason: '두 번째 클리어는 딜레이 후에 발동한다');
 
-      // 딜레이(1초)가 지나면 남아 있던 사각형까지 클리어된다.
-      controller.update(GameController.doubleClearDelay);
+      // 딜레이가 지나면 남아 있던 사각형까지 클리어된다.
+      controller.update(controller.doubleClearDelay);
       expect(square.isCleared, isTrue);
     });
 
-    test('두 번째 클리어는 1초 딜레이 뒤에 발동한다', () {
-      expect(GameController.doubleClearDelay, const Duration(seconds: 1));
+    test('에코 프로토콜 기본 딜레이는 2초다', () {
+      expect(GameController.defaultDoubleClearDelay, const Duration(seconds: 2));
+      expect(_controllerFor(RunPresets.stage1).doubleClearDelay,
+          const Duration(seconds: 2));
+    });
+
+    test('에코 프로토콜 딜레이는 조정 가능한 파라미터다', () {
+      // 업그레이드로 짧아질 수 있어야 한다.
+      final upgraded = GameController(
+        runConfig: RunPresets.stage1,
+        random: math.Random(7),
+        doubleClearDelay: GameController.minDoubleClearDelay,
+      )..setFieldSize(const Size(400, 500));
+
+      expect(upgraded.doubleClearDelay, const Duration(milliseconds: 500));
+      expect(GameController.minDoubleClearDelay,
+          lessThan(GameController.defaultDoubleClearDelay));
     });
 
     test('켜져 있는 동안 게이지가 소모된다', () {
@@ -939,10 +954,95 @@ void main() {
 
       final perShape = individual.first.score;
       expect(individual.every((p) => p.score == perShape), isTrue);
-      expect(combo.single.score,
-          GameController.comboBonusFor(perShape, 3));
+      expect(combo.single.score, GameController.comboBonusFor(3));
       // 표시된 팝업 합계가 실제 획득 점수와 일치한다.
       expect(perShape * 3 + combo.single.score, controller.score);
+    });
+
+    test('콤보 공식은 5 x n x (n-1)이고 n에 상한이 없다', () {
+      expect(GameController.comboBonusFactor, 5);
+      expect(GameController.comboBonusFor(1), 0);
+      expect(GameController.comboBonusFor(2), 10);
+      expect(GameController.comboBonusFor(3), 30);
+      expect(GameController.comboBonusFor(4), 60);
+      expect(GameController.comboBonusFor(10), 450);
+      expect(GameController.comboBonusFor(20), 1900);
+
+      // 임의로 큰 n에서도 공식이 그대로 성립한다.
+      for (final n in [5, 7, 13, 20, 50]) {
+        expect(GameController.comboBonusFor(n), 5 * n * (n - 1), reason: 'n=$n');
+      }
+    });
+
+    test('4개 이상 동시 클리어도 콤보 팝업이 뜬다 (3개 상한 없음)', () {
+      // 회귀 방지: 4개 이상에서 콤보 표시가 안 된다는 보고가 있었다.
+      for (final n in [4, 7, 20]) {
+        final controller = _controllerFor(RunPresets.stage1);
+        controller.shapes.addAll([
+          for (int i = 0; i < n; i++)
+            _shape(['circle'], id: 8000 + i, y: 100.0 + i * 10),
+        ]);
+
+        _draw(controller, 'circle');
+
+        final individual =
+            controller.scorePopups.where((p) => p.label == null).toList();
+        final combo =
+            controller.scorePopups.where((p) => p.label == 'COMBO').toList();
+
+        expect(individual.length, n, reason: 'n=$n 개별 팝업');
+        expect(combo.length, 1, reason: 'n=$n 콤보 팝업');
+        expect(combo.single.score, GameController.comboBonusFor(n),
+            reason: 'n=$n 보너스');
+        // 표시값 합계가 실제 획득 점수와 일치한다.
+        expect(individual.first.score * n + combo.single.score, controller.score,
+            reason: 'n=$n 총점');
+      }
+    });
+
+    test('콤보 팝업은 맨 아래 도형부터 차례로 뜬다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1, y: 100), // 맨 위
+        _shape(['circle'], id: 2, y: 300), // 맨 아래
+        _shape(['circle'], id: 3, y: 200),
+      ]);
+
+      _draw(controller, 'circle');
+
+      final individual =
+          controller.scorePopups.where((p) => p.label == null).toList()
+            ..sort((a, b) => a.startDelay.compareTo(b.startDelay));
+
+      // 지연이 짧은 순서 = 먼저 뜨는 순서 = y가 큰(아래) 순서.
+      expect(individual.map((p) => p.startY).toList(), [300.0, 200.0, 100.0]);
+      expect(individual.first.startDelay, Duration.zero);
+      expect(individual.last.startDelay, greaterThan(Duration.zero));
+
+      // 콤보 팝업은 개별 팝업이 다 뜬 뒤에 온다.
+      final combo =
+          controller.scorePopups.firstWhere((p) => p.label == 'COMBO');
+      expect(combo.startDelay, greaterThan(individual.last.startDelay));
+    });
+
+    test('아직 뜰 차례가 아닌 팝업은 보이지 않는다', () {
+      final controller = _controllerFor(RunPresets.stage1);
+      controller.shapes.addAll([
+        _shape(['circle'], id: 1, y: 100),
+        _shape(['circle'], id: 2, y: 300),
+      ]);
+
+      _draw(controller, 'circle');
+
+      final later = controller.scorePopups
+          .where((p) => p.label == null && p.startDelay > Duration.zero)
+          .first;
+      expect(later.isWaiting, isTrue);
+      expect(later.alpha, 0);
+
+      controller.update(later.startDelay + const Duration(milliseconds: 16));
+      expect(later.isWaiting, isFalse);
+      expect(later.alpha, greaterThan(0));
     });
 
     test('단일 클리어에는 콤보 팝업이 붙지 않는다', () {
@@ -953,7 +1053,7 @@ void main() {
 
       expect(controller.scorePopups.length, 1);
       expect(controller.scorePopups.single.label, isNull);
-      expect(GameController.comboBonusFor(10, 1), 0);
+      expect(GameController.comboBonusFor(1), 0);
     });
 
     test('레이어만 벗겨진 경우 파티클/버스트 없이 점수 팝업만 뜬다', () {
@@ -1150,31 +1250,36 @@ void main() {
       expect(slowedDelta, lessThan(normalDelta));
     });
 
-    test('5단계 보스를 클리어하면 타임 슬로우가 해금된다', () {
+    test('5단계를 클리어하면 타임 슬로우가 해금된다', () async {
       expect(UnlockState.instance.timeSlowUnlocked, isFalse);
 
-      final controller = _controllerFor(_bossConfigWith(BossTraits.standard));
-      _advanceToBoss(controller);
-      controller.update(GameController.bossIntroDuration); // 판정 가능해지도록
-      final boss = controller.shapes.firstWhere((s) => s.isBoss);
-      boss.clearedLayers = boss.layers.length - 1;
+      await UnlockState.instance.markStageCleared(5);
 
-      _draw(controller, boss.activeName);
-
-      expect(boss.isCleared, isTrue);
       expect(UnlockState.instance.timeSlowUnlocked, isTrue);
     });
 
-    test('5단계가 아닌 보스(쌍둥이)를 클리어해도 해금되지 않는다', () {
-      final controller = _controllerWithBoss(RunPresets.stage10);
-      controller.update(GameController.bossIntroDuration); // 판정 가능해지도록
-      final boss = controller.shapes.firstWhere((s) => s.isBoss);
-      boss.clearedLayers = boss.layers.length - 1;
-
-      _draw(controller, boss.activeName);
-
-      expect(boss.isCleared, isTrue);
+    test('보스를 놓치고 제한 시간으로 클리어해도 해금된다', () async {
+      // 회귀 방지: 예전에는 "보스를 직접 처치"해야만 해금돼서, 시간
+      // 만료로 5단계를 클리어하면 3번째 스킬이 지급되지 않았다.
       expect(UnlockState.instance.timeSlowUnlocked, isFalse);
+
+      // 보스에 손도 대지 않고 스테이지 클리어만 기록한다.
+      await UnlockState.instance.markStageCleared(RunPresets.stage5.stageNumber!);
+
+      expect(UnlockState.instance.timeSlowUnlocked, isTrue);
+    });
+
+    test('5단계 이후 단계를 클리어해도 해금 상태가 유지된다', () async {
+      await UnlockState.instance.markStageCleared(7);
+      expect(UnlockState.instance.timeSlowUnlocked, isTrue);
+    });
+
+    test('4단계까지는 해금되지 않는다', () async {
+      for (int stage = 1; stage <= 4; stage++) {
+        await UnlockState.instance.markStageCleared(stage);
+        expect(UnlockState.instance.timeSlowUnlocked, isFalse,
+            reason: '$stage단계');
+      }
     });
   });
 
@@ -1394,6 +1499,32 @@ void main() {
       expect(controller.skillRings.hasVisibleRings, isFalse);
     });
 
+    test('아주 짧게 껐다 켜도 등장 1사이클을 완주한 뒤 퇴장한다', () {
+      final controller = readyController();
+      controller.toggleSkill();
+
+      // 등장이 외곽->중앙 한 바퀴 돌기 훨씬 전에 꺼버린다.
+      controller.update(const Duration(milliseconds: 50));
+      controller.toggleSkill();
+
+      final cycle = controller.skillRings.entranceCycle;
+      expect(cycle, SkillFrameOverlay.entranceCycle);
+
+      // 사이클이 끝나는 시점까지는 링이 계속 나타나는 중이어야 한다.
+      controller.update(cycle);
+      expect(controller.skillRings.hasVisibleRings, isTrue,
+          reason: '1사이클을 완주하기 전에 사라지면 안 된다');
+
+      final innermost = controller.skillRings.rings.last;
+      expect(innermost.visibleAnimations, isNotEmpty);
+      expect(innermost.visibleAnimations.first.alpha, closeTo(1.0, 1e-6),
+          reason: '가장 안쪽 링까지 완전히 나타난 뒤에 퇴장이 시작된다');
+
+      // 그 뒤에야 퇴장이 진행되어 결국 사라진다.
+      controller.update(cycle + const Duration(seconds: 2));
+      expect(controller.skillRings.hasVisibleRings, isFalse);
+    });
+
     test('빠르게 껐다 켜도 이전 퇴장 애니메이션이 끝까지 재생된다', () {
       final controller = readyController();
       controller.toggleSkill();
@@ -1500,20 +1631,70 @@ void main() {
           const Duration(seconds: 1));
     });
 
-    test('스킬마다 서로 대비되는 두 색이 정의되어 있다', () {
+    test('배경 이펙트 두 색은 명도가 같고 채도만 다르다', () {
       for (final skill in ActiveSkill.values) {
-        final palette = SkillVisuals.of(skill);
-        expect(palette.bright, isNot(equals(palette.dim)),
-            reason: '$skill는 번갈아 표시할 두 색이 달라야 한다');
+        final high = SkillVisuals.effectColor(
+            skill, SkillVisuals.stripeHighSaturation);
+        final low = SkillVisuals.effectColor(
+            skill, SkillVisuals.stripeLowSaturation);
 
-        // 명도 대비가 확실히 벌어져 있어야 한다.
-        final brightL = HSLColor.fromColor(palette.bright).lightness;
-        final dimL = HSLColor.fromColor(palette.dim).lightness;
-        expect((brightL - dimL).abs(), greaterThan(0.3), reason: '$skill 명도 대비');
+        final h = HSLColor.fromColor(high);
+        final l = HSLColor.fromColor(low);
+
+        expect(high, isNot(equals(low)), reason: '$skill 두 색이 같으면 안 된다');
+        // 명도는 동일.
+        // 8비트 색으로 왕복하며 생기는 반올림 오차만 허용한다.
+        expect(h.lightness, closeTo(l.lightness, 0.01), reason: '$skill 명도');
+        expect(h.lightness, closeTo(SkillVisuals.effectLightness, 0.01));
+        // 색상(Hue)은 스킬 고유색 유지.
+        expect(h.hue, closeTo(l.hue, 0.5), reason: '$skill 색상');
+        // 채도만 다르다.
+        expect(h.saturation, greaterThan(l.saturation), reason: '$skill 채도');
       }
       // 스킬끼리 대표색이 겹치지 않는다.
-      final accents = ActiveSkill.values.map((s) => SkillVisuals.of(s).accent);
+      final accents = ActiveSkill.values.map(SkillVisuals.accentOf);
       expect(accents.toSet().length, ActiveSkill.values.length);
+    });
+
+    test('반짝임 간격은 0.5초다', () {
+      expect(SkillFrameOverlay.colorInterval, const Duration(milliseconds: 500));
+    });
+
+    test('스킬 하나면 홀/짝 링이 서로 다른 채도로 줄무늬를 이루고 교대한다', () {
+      // 이 규칙은 페인터가 state.clock과 링 인덱스만으로 계산하므로,
+      // 여기서는 그 계산과 같은 식으로 검증한다.
+      double saturationAt(int ringIndex, Duration clock) {
+        final step = clock.inMicroseconds ~/
+            SkillFrameOverlay.colorInterval.inMicroseconds;
+        final swapped = step.isOdd;
+        final highGroup = ringIndex.isEven != swapped;
+        return highGroup
+            ? SkillVisuals.stripeHighSaturation
+            : SkillVisuals.stripeLowSaturation;
+      }
+
+      const t0 = Duration.zero;
+      // 같은 시각에 이웃한 링은 서로 다른 채도(줄무늬).
+      expect(saturationAt(0, t0), isNot(saturationAt(1, t0)));
+      expect(saturationAt(1, t0), isNot(saturationAt(2, t0)));
+
+      // 같은 그룹(인덱스 패리티가 같은 링)은 동시에 같은 값 — 순차 파도가 아님.
+      expect(saturationAt(0, t0), saturationAt(2, t0));
+      expect(saturationAt(1, t0), saturationAt(3, t0));
+
+      // 한 주기 뒤 두 그룹이 서로 맞바뀐다.
+      final t1 = SkillFrameOverlay.colorInterval;
+      expect(saturationAt(0, t1), saturationAt(1, t0));
+      expect(saturationAt(1, t1), saturationAt(0, t0));
+    });
+
+    test('스킬 둘이면 채도 대비로 구분하고 어느 쪽이 쨍한지는 상수로 정한다', () {
+      expect(SkillVisuals.dualHighSaturation,
+          greaterThan(SkillVisuals.dualLowSaturation));
+      expect(SkillVisuals.dualHighSaturation, 1.0);
+      expect(SkillVisuals.dualLowSaturation, 0.65);
+      // 어느 쪽이 높은 채도를 갖는지 뒤집을 수 있어야 한다.
+      expect(SkillVisuals.newerSkillTakesHighSaturation, isA<bool>());
     });
 
     test('가장 안쪽 사각형은 화면의 약 60%의 10% 크기다', () {
